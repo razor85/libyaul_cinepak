@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Default|x64">
+      <Configuration>Default</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>16.0</VCProjectVersion>
+    <ProjectGuid>{7152B4B7-C702-413B-BDDC-5BFC66CE29AB}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <yaul>C:\\Desenvolvimento\\SegaSaturn\\yaul\\opt\\tool-chains\\sh2eb-elf\\sh2eb-elf\\include\\</yaul>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Default|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Default|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="PropertySheet.props" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Default|x64'">
+    <NMakeBuildCommandLine>c:\Desenvolvimento\SegaSaturn\yaul\usr\bin\sh.exe --login -ic "cd ~/cinepak_player &amp;&amp; make -j8"</NMakeBuildCommandLine>
+    <NMakeOutput>Saturn.exe</NMakeOutput>
+    <NMakeCleanCommandLine>c:\Desenvolvimento\SegaSaturn\yaul\usr\bin\sh.exe --login -ic "cd ~/cinepak_player &amp;&amp; make clean"</NMakeCleanCommandLine>
+    <NMakeReBuildCommandLine>c:\Desenvolvimento\SegaSaturn\yaul\usr\bin\sh.exe --login -ic "cd ~/cinepak_player &amp;&amp; make clean &amp;&amp; make -j8"</NMakeReBuildCommandLine>
+    <NMakePreprocessorDefinitions>NDEBUG;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+    <NMakeIncludeSearchPath>$(sh2eb-elf-include);$(sh2eb-elf-include)yaul\bcl\;$(sh2eb-elf-include)yaul\;$(sh2eb-elf-include)yaul\common\;$(sh2eb-elf-include)yaul\cons\;$(sh2eb-elf-include)yaul\math\;$(sh2eb-elf-include)yaul\lib\;$(sh2eb-elf-include)yaul\fs\cd\;$(sh2eb-elf-include)yaul\scu;$(sh2eb-elf-include)yaul\scu\bus\a\cs0\arp;$(sh2eb-elf-include)yaul\scu\bus\a\cs0\dram-cart;$(sh2eb-elf-include)yaul\scu\bus\a\cs0\usb-cart;$(sh2eb-elf-include)yaul\scu\bus\a\cs2\cd-block;$(sh2eb-elf-include)yaul\scu\bus\b\scsp;$(sh2eb-elf-include)yaul\scu\bus\b\vdp;$(sh2eb-elf-include)yaul\scu\bus\b\vdp\vdp1;$(sh2eb-elf-include)yaul\scu\bus\b\vdp\vdp2;$(sh2eb-elf-include)yaul\scu\bus\cpu;$(sh2eb-elf-include)yaul\scu\bus\cpu\cpu;$(sh2eb-elf-include)yaul\scu\bus\cpu\smpc;$(sh2eb-elf-include)tga\;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+    <IncludePath>$(sh2eb-elf-include);$(sh2eb-elf-include)yaul\bcl\;$(sh2eb-elf-include)yaul\;$(sh2eb-elf-include)yaul\common\;$(sh2eb-elf-include)yaul\cons\;$(sh2eb-elf-include)yaul\math\;$(sh2eb-elf-include)yaul\lib\;$(sh2eb-elf-include)yaul\fs\cd\;$(sh2eb-elf-include)yaul\scu;$(sh2eb-elf-include)yaul\scu\bus\a\cs0\arp;$(sh2eb-elf-include)yaul\scu\bus\a\cs0\dram-cart;$(sh2eb-elf-include)yaul\scu\bus\a\cs0\usb-cart;$(sh2eb-elf-include)yaul\scu\bus\a\cs2\cd-block;$(sh2eb-elf-include)yaul\scu\bus\b\scsp;$(sh2eb-elf-include)yaul\scu\bus\b\vdp;$(sh2eb-elf-include)yaul\scu\bus\b\vdp\vdp1;$(sh2eb-elf-include)yaul\scu\bus\b\vdp\vdp2;$(sh2eb-elf-include)yaul\scu\bus\cpu;$(sh2eb-elf-include)yaul\scu\bus\cpu\cpu;$(sh2eb-elf-include)yaul\scu\bus\cpu\smpc;$(sh2eb-elf-include)tga\</IncludePath>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\base.c" />
+    <ClCompile Include="..\..\decoder.c" />
+    <ClCompile Include="..\..\main.c" />
+    <ClCompile Include="..\..\md5.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\decoder.h" />
+    <ClInclude Include="..\..\base.h" />
+    <ClInclude Include="..\..\md5.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\.clang-format" />
+    <None Include="..\..\Makefile" />
+    <None Include="cpp.hint" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
