@@ -26,6 +26,7 @@ int main() {
   cdfs_filelist_root_read(&filelist);
 
   const char* desiredFile = "APPLE.CPK";
+  // const char* desiredFile = "SONIC.CPK";
 
   // Find test entry
   cdfs_filelist_entry_t* testEntry = NULL;

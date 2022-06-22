@@ -33,12 +33,10 @@ typedef struct {
   // 0 or 1
   uint8_t frontIndex;
 
-  // Index of the current sample being read
+  // Index of the current sample being read.
   uint8_t currentSample;
 
-  // If there is a copy in progress for the back buffer it will store
-  // the buffer index, otherwise 0xFF
-  uint8_t cdCopyBuffer;
+  // Number of samples prepared to be copied from cd.
   uint8_t numCopySamples;
 
   // Index to the sector containing the next set of sample descriptions.
@@ -60,10 +58,8 @@ typedef struct {
   // 0 or 1.
   uint8_t frontIndex;
 
-  // Next time we queue up something to copy, we store the buffer that was used
-  // [1, 199] (0 is reserved for samples) and how much data we queued.
-  uint8_t cdCopyBuffer;
-  uint8_t queuedSectors;
+  // How much are we copying from next buffer.
+  uint32_t queuedDataSize;
 
   // Next read for data.
   uint32_t nextCacheFAD;
@@ -93,10 +89,33 @@ typedef struct {
   // Offset from the beginning of the file where the next data should be.
   uint32_t nextDataPos;
 
-  // Used as a helper for section, might remove.
-  int32_t remainingBytesToNextSection;
-  
 } binary_stream_t;
+
+#define MAX_STRIPS 32
+
+typedef struct {
+  uint8_t y[4];
+  int8_t u;
+  int8_t v;
+} codebook_t;
+
+typedef struct {
+  codebook_t v1[256];
+  codebook_t v4[256];
+} strip_codebook_t;
+
+typedef struct {
+  strip_codebook_t codebooks[MAX_STRIPS];
+  uint16_t strip;
+
+  uint16_t writeX;
+  uint16_t writeY;
+
+  uint16_t topX;
+  uint16_t topY;
+  uint16_t bottomX;
+  uint16_t bottomY;
+} stripdata_t;
 
 extern void play_film(cdfs_filelist_entry_t *fsEntry, void *dataCache0,
   void *dataCache1);
