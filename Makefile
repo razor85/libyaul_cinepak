@@ -12,7 +12,7 @@ SH_SRCS :=   \
   main.c
 
 SH_LIBRARIES:=
-SH_CFLAGS+= -I. -O2 -g -Wall -Wno-unused-function
+SH_CFLAGS+= -I. -O3 -g -Wall -Wno-unused-function
 IP_VERSION:= V1.000
 IP_RELEASE_DATE:= 20220720
 IP_AREAS:= JTUBKAEL

@@ -111,7 +111,7 @@ void user_init(void) {
 
   vdp_sync_vblank_out_set(_vblank_out_handler, NULL);
 
-  cpu_frt_init(CPU_FRT_CLOCK_DIV_128);
+  cpu_frt_init(CPU_FRT_CLOCK_DIV_32);
 
   dbgio_init();
   dbgio_dev_default_init(DBGIO_DEV_VDP2_ASYNC);

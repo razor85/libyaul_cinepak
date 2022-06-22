@@ -108,13 +108,14 @@ typedef struct {
   strip_codebook_t codebooks[MAX_STRIPS];
   uint16_t strip;
 
-  uint16_t writeX;
+  uint16_t topY;
   uint16_t writeY;
 
   uint16_t topX;
-  uint16_t topY;
-  uint16_t bottomX;
+  uint16_t writeX;
+
   uint16_t bottomY;
+  uint16_t bottomX;
 } stripdata_t;
 
 extern void play_film(cdfs_filelist_entry_t *fsEntry, void *dataCache0,
