@@ -91,7 +91,7 @@ typedef struct {
 
 } binary_stream_t;
 
-#define MAX_STRIPS 32
+#define MAX_STRIPS 16
 
 typedef struct {
   uint8_t y[4];

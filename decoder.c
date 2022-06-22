@@ -384,21 +384,18 @@ void film_read_sample(film_sample_t *sample) {
     LOGGER("  KeyFrame = %d\n", film_sample_is_keyFrame(sample));
 }
 
-inline void writeYUV(const codebook_t *codebook, uint8_t cy, uint32_t x, uint32_t y) {
-  // TODO:
-  // if (x >= VIDEO_WIDTH || y >= VIDEO_HEIGHT)
-  //   return;
-  
+static uint16_t *imagePtr = (uint16_t *)VDP2_VRAM_ADDR(0, 0);
+inline void writeYUV(uint8_t cy, int16_t cr, int16_t cg, int16_t cb,
+  uint32_t index) {
+
+  DEBUG_REQUIRE_LT(index, vdp2Width * vdp2Height);
+
   // | r |   | 1.0  0.0  2.0 | | y |
   // | g | = | 1.0 -0.5 -1.0 | | u |
   // | b |   | 1.0  2.0  0.0 | | v |
-  const int r = cy + (codebook->v << 1);
-  const int g = cy - (codebook->u >> 1) - codebook->v;
-  const int b = cy + (codebook->u << 1);
-
-  // VDP2 image has 512x256
-  const size_t imageIndex = y * vdp2Width + x;
-  DEBUG_REQUIRE_LT(imageIndex, vdp2Width * vdp2Height);
+  const int r = cy + cr;
+  const int g = cy + cg;
+  const int b = cy + cb;
 
   // TODO:
   // uint8_t nr = r < 0 ? 0 : r > 255 ? 255 : r;
@@ -408,8 +405,7 @@ inline void writeYUV(const codebook_t *codebook, uint8_t cy, uint32_t x, uint32_
   uint8_t ng = g;
   uint8_t nb = b;
 
-  static uint16_t *imagePtr = (uint16_t*) VDP2_VRAM_ADDR(0, 0);
-  imagePtr[imageIndex] = COLOR_RGB1888_RGB1555(1, nr, ng, nb).raw;
+  imagePtr[index] = COLOR_RGB1888_RGB1555(1, nr, ng, nb).raw;
 }
 
 inline void stripdata_skipBlock(stripdata_t *data) {
@@ -425,6 +421,16 @@ void renderPixel1(stripdata_t *data, uint8_t c0) {
   const uint16_t x = data->writeX;
   const uint16_t y = data->writeY;
 
+  // VDP2 image has 512x256
+  uint32_t imageIndex = y * vdp2Width + x;
+
+  // | r |   | 1.0  0.0  2.0 | | y |
+  // | g | = | 1.0 -0.5 -1.0 | | u |
+  // | b |   | 1.0  2.0  0.0 | | v |
+  const int16_t cr = (e0->v << 1);
+  const int16_t cg = - (e0->u >> 1) - e0->v;
+  const int16_t cb = + (e0->u << 1);
+
   // +----+----+  +---+  +---+
   // | y0 | y1 |  | u |  | v |
   // +----+----+  +---+  +---+
@@ -434,34 +440,43 @@ void renderPixel1(stripdata_t *data, uint8_t c0) {
   if (y + 0 >= data->bottomY)
     return;
 
-  writeYUV(e0, e0->y[0], x + 0, y + 0);
-  writeYUV(e0, e0->y[0], x + 1, y + 0);
-  writeYUV(e0, e0->y[1], x + 2, y + 0);
-  writeYUV(e0, e0->y[1], x + 3, y + 0);
+  writeYUV(e0->y[0], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[0], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[1], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[1], cr, cg, cb, imageIndex++);
   
   if (y + 1 >= data->bottomY)
     return;
 
-  writeYUV(e0, e0->y[0], x + 0, y + 1);
-  writeYUV(e0, e0->y[0], x + 1, y + 1);
-  writeYUV(e0, e0->y[1], x + 2, y + 1);
-  writeYUV(e0, e0->y[1], x + 3, y + 1);
+  imageIndex -= 4;
+  imageIndex += vdp2Width;
+
+  writeYUV(e0->y[0], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[0], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[1], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[1], cr, cg, cb, imageIndex++);
   
   if (y + 2 >= data->bottomY)
     return;
+  
+  imageIndex -= 4;
+  imageIndex += vdp2Width;
 
-  writeYUV(e0, e0->y[2], x + 0, y + 2);
-  writeYUV(e0, e0->y[2], x + 1, y + 2);
-  writeYUV(e0, e0->y[3], x + 2, y + 2);
-  writeYUV(e0, e0->y[3], x + 3, y + 2);
+  writeYUV(e0->y[2], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[2], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[3], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[3], cr, cg, cb, imageIndex++);
   
   if (y + 3 >= data->bottomY)
     return;
+  
+  imageIndex -= 4;
+  imageIndex += vdp2Width;
 
-  writeYUV(e0, e0->y[2], x + 0, y + 3);
-  writeYUV(e0, e0->y[2], x + 1, y + 3);
-  writeYUV(e0, e0->y[3], x + 2, y + 3);
-  writeYUV(e0, e0->y[3], x + 3, y + 3);
+  writeYUV(e0->y[2], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[2], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[3], cr, cg, cb, imageIndex++);
+  writeYUV(e0->y[3], cr, cg, cb, imageIndex++);
 }
 
 void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
@@ -474,6 +489,20 @@ void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
 
   const uint16_t x = data->writeX;
   const uint16_t y = data->writeY;
+  
+  // VDP2 image has 512x256
+  uint32_t imageIndex = y * vdp2Width + x;
+  
+  // | r |   | 1.0  0.0  2.0 | | y |
+  // | g | = | 1.0 -0.5 -1.0 | | u |
+  // | b |   | 1.0  2.0  0.0 | | v |
+  const int16_t cr0 = (e0->v << 1);
+  const int16_t cg0 = - (e0->u >> 1) - e0->v;
+  const int16_t cb0 = + (e0->u << 1);
+
+  const int16_t cr1 = (e1->v << 1);
+  const int16_t cg1 = - (e1->u >> 1) - e1->v;
+  const int16_t cb1 = + (e1->u << 1);
 
   // +------+------+------+------+  +-----+-----+  +-----+-----+
   // | e0y0 | e0y1 | e1y0 | e1y1 |  | e0u | e1u |  | e0v | e1v |
@@ -487,34 +516,54 @@ void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
   if (y + 0 >= data->bottomY)
     return;
 
-  writeYUV(e0, e0->y[0], x + 0, y + 0);
-  writeYUV(e0, e0->y[1], x + 1, y + 0);
-  writeYUV(e1, e1->y[0], x + 2, y + 0);
-  writeYUV(e1, e1->y[1], x + 3, y + 0);
+  writeYUV(e0->y[0], cr0, cg0, cb0, imageIndex++);
+  writeYUV(e0->y[1], cr0, cg0, cb0, imageIndex++);
+  writeYUV(e1->y[0], cr1, cg1, cb1, imageIndex++);
+  writeYUV(e1->y[1], cr1, cg1, cb1, imageIndex++);
 
   if (y + 1 >= data->bottomY)
     return;
+  
+  imageIndex -= 4;
+  imageIndex += vdp2Width;
 
-  writeYUV(e0, e0->y[2], x + 0, y + 1);
-  writeYUV(e0, e0->y[3], x + 1, y + 1);
-  writeYUV(e1, e1->y[2], x + 2, y + 1);
-  writeYUV(e1, e1->y[3], x + 3, y + 1);
+  writeYUV(e0->y[2], cr0, cg0, cb0, imageIndex++);
+  writeYUV(e0->y[3], cr0, cg0, cb0, imageIndex++);
+  writeYUV(e1->y[2], cr1, cg1, cb1, imageIndex++);
+  writeYUV(e1->y[3], cr1, cg1, cb1, imageIndex++);
 
   if (y + 2 >= data->bottomY)
     return;
+  
+  imageIndex -= 4;
+  imageIndex += vdp2Width;
 
-  writeYUV(e2, e2->y[0], x + 0, y + 2);
-  writeYUV(e2, e2->y[1], x + 1, y + 2);
-  writeYUV(e3, e3->y[0], x + 2, y + 2);
-  writeYUV(e3, e3->y[1], x + 3, y + 2);
+  // | r |   | 1.0  0.0  2.0 | | y |
+  // | g | = | 1.0 -0.5 -1.0 | | u |
+  // | b |   | 1.0  2.0  0.0 | | v |
+  const int16_t cr2 = (e2->v << 1);
+  const int16_t cg2 = - (e2->u >> 1) - e2->v;
+  const int16_t cb2 = + (e2->u << 1);
+
+  const int16_t cr3 = (e3->v << 1);
+  const int16_t cg3 = - (e3->u >> 1) - e3->v;
+  const int16_t cb3 = + (e3->u << 1);
+
+  writeYUV(e2->y[0], cr2, cg2, cb2, imageIndex++);
+  writeYUV(e2->y[1], cr2, cg2, cb2, imageIndex++);
+  writeYUV(e3->y[0], cr3, cg3, cb3, imageIndex++);
+  writeYUV(e3->y[1], cr3, cg3, cb3, imageIndex++);
 
   if (y + 3 >= data->bottomY)
     return;
 
-  writeYUV(e2, e2->y[2], x + 0, y + 3);
-  writeYUV(e2, e2->y[3], x + 1, y + 3);
-  writeYUV(e3, e3->y[2], x + 2, y + 3);
-  writeYUV(e3, e3->y[3], x + 3, y + 3);
+  imageIndex -= 4;
+  imageIndex += vdp2Width;
+
+  writeYUV(e2->y[2], cr2, cg2, cb2, imageIndex++);
+  writeYUV(e2->y[3], cr2, cg2, cb2, imageIndex++);
+  writeYUV(e3->y[2], cr3, cg3, cb3, imageIndex++);
+  writeYUV(e3->y[3], cr3, cg3, cb3, imageIndex++);
 }
 
 inline void readChunk12V1(const film_sample_t *sample, binary_stream_t *stream,
