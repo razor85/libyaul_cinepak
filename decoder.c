@@ -384,7 +384,7 @@ void film_read_sample(film_sample_t *sample) {
     LOGGER("  KeyFrame = %d\n", film_sample_is_keyFrame(sample));
 }
 
-static uint16_t *imagePtr = (uint16_t *)VDP2_VRAM_ADDR(0, 0);
+uint16_t *vdp2ImagePtr = (uint16_t *)VDP2_VRAM_ADDR(0, 0);
 inline void writeYUV(uint8_t cy, int16_t cr, int16_t cg, int16_t cb,
   uint32_t index) {
 
@@ -405,7 +405,7 @@ inline void writeYUV(uint8_t cy, int16_t cr, int16_t cg, int16_t cb,
   uint8_t ng = g;
   uint8_t nb = b;
 
-  imagePtr[index] = COLOR_RGB1888_RGB1555(1, nr, ng, nb).raw;
+  vdp2ImagePtr[index] = COLOR_RGB1888_RGB1555(1, nr, ng, nb).raw;
 }
 
 inline void stripdata_skipBlock(stripdata_t *data) {
@@ -448,8 +448,7 @@ void renderPixel1(stripdata_t *data, uint8_t c0) {
   if (y + 1 >= data->bottomY)
     return;
 
-  imageIndex -= 4;
-  imageIndex += vdp2Width;
+  imageIndex += vdp2Width - 4;
 
   writeYUV(e0->y[0], cr, cg, cb, imageIndex++);
   writeYUV(e0->y[0], cr, cg, cb, imageIndex++);
@@ -459,8 +458,7 @@ void renderPixel1(stripdata_t *data, uint8_t c0) {
   if (y + 2 >= data->bottomY)
     return;
   
-  imageIndex -= 4;
-  imageIndex += vdp2Width;
+  imageIndex += vdp2Width - 4;
 
   writeYUV(e0->y[2], cr, cg, cb, imageIndex++);
   writeYUV(e0->y[2], cr, cg, cb, imageIndex++);
@@ -470,8 +468,7 @@ void renderPixel1(stripdata_t *data, uint8_t c0) {
   if (y + 3 >= data->bottomY)
     return;
   
-  imageIndex -= 4;
-  imageIndex += vdp2Width;
+  imageIndex += vdp2Width - 4;
 
   writeYUV(e0->y[2], cr, cg, cb, imageIndex++);
   writeYUV(e0->y[2], cr, cg, cb, imageIndex++);
@@ -524,8 +521,7 @@ void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
   if (y + 1 >= data->bottomY)
     return;
   
-  imageIndex -= 4;
-  imageIndex += vdp2Width;
+  imageIndex += vdp2Width - 4;
 
   writeYUV(e0->y[2], cr0, cg0, cb0, imageIndex++);
   writeYUV(e0->y[3], cr0, cg0, cb0, imageIndex++);
@@ -535,8 +531,7 @@ void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
   if (y + 2 >= data->bottomY)
     return;
   
-  imageIndex -= 4;
-  imageIndex += vdp2Width;
+  imageIndex += vdp2Width - 4;
 
   // | r |   | 1.0  0.0  2.0 | | y |
   // | g | = | 1.0 -0.5 -1.0 | | u |
@@ -557,8 +552,7 @@ void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
   if (y + 3 >= data->bottomY)
     return;
 
-  imageIndex -= 4;
-  imageIndex += vdp2Width;
+  imageIndex += vdp2Width - 4;
 
   writeYUV(e2->y[2], cr2, cg2, cb2, imageIndex++);
   writeYUV(e2->y[3], cr2, cg2, cb2, imageIndex++);
