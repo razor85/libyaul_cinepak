@@ -3,7 +3,7 @@
 
 #include "base.h"
 
-#define DATA_CACHE_SIZE (CDFS_SECTOR_SIZE * 16)
+#define DATA_CACHE_SIZE (CDFS_SECTOR_SIZE * 40)
 
 #define CDFS_DATA_SELECTOR 0
 #define CDFS_SAMPLE_SELECTOR 1
@@ -102,7 +102,7 @@ typedef struct {
 typedef struct {
   codebook_t v1[256];
   codebook_t v4[256];
-} strip_codebook_t;
+} __aligned(16) strip_codebook_t;
 
 typedef struct {
   strip_codebook_t codebooks[MAX_STRIPS];

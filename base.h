@@ -51,6 +51,6 @@ extern void satAssert(const char *filename, int line, const char *msg);
     dbgio_flush();                                                             \
     vdp2_sync();                                                               \
     vdp2_sync_wait();                                                          \
-  } \
+  }
 
 #endif // BASE_H

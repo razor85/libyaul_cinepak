@@ -1,6 +1,8 @@
 #include "base.h"
 #include "decoder.h"
 
+static void _vblank_in_handler(void *work __unused);
+
 static void _vblank_out_handler(void *work __unused);
 
 static void _frt_ovi_handler(void);
@@ -108,6 +110,8 @@ void user_init(void) {
 
   vdp2_scrn_back_color_set(VDP2_VRAM_ADDR(3, 0x01FFFE),
     COLOR_RGB1555(1, 0, 3, 15));
+  
+  vdp_sync_vblank_in_set(_vblank_in_handler, NULL);
 
   vdp_sync_vblank_out_set(_vblank_out_handler, NULL);
 
@@ -122,6 +126,9 @@ void user_init(void) {
   cd_block_init();
 
   smpc_peripheral_init();
+}
+
+static void _vblank_in_handler(void *work __unused) {
 }
 
 static void _vblank_out_handler(void *work __unused) {
