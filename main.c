@@ -7,7 +7,7 @@ static void _vblank_out_handler(void *work __unused);
 
 static void _frt_ovi_handler(void);
 
-static smpc_peripheral_digital_t _digital;
+static smpc_peripheral_digital_t pad0;
 
 static cdfs_filelist_t filelist;
 
@@ -18,33 +18,62 @@ static uint8_t dataCaches[DATA_CACHE_SIZE * 2];
 void clearConsole() { dbgio_printf("[H[2J"); }
 
 int main() {
-  /* Load the maximum number. We have to free the allocated filelist
-   * entries, but since we never exit, we don't have to */
   cdfs_filelist_entry_t *const filelist_entries = cdfs_entries_alloc(-1);
   DEBUG_REQUIRE(filelist_entries != NULL);
 
   cdfs_filelist_default_init(&filelist, filelist_entries, -1);
-
   cdfs_filelist_root_read(&filelist);
 
-  const char* desiredFile = "APPLE.CPK";
-  // const char* desiredFile = "SONIC.CPK";
+  cdfs_filelist_entry_t *movieEntries[20];
+  memset(movieEntries, 0, sizeof(cdfs_filelist_entry_t*) * 20);
 
-  // Find test entry
-  cdfs_filelist_entry_t* testEntry = NULL;
+  uint32_t numMovieEntries = 0;
   for (uint32_t i = 0; i < filelist.entries_count; ++i) {
-    if (strcmp(desiredFile, filelist.entries[i].name) == 0) {
-      testEntry = &filelist.entries[i];
-      break;
-    }
+    const char* name = filelist.entries[i].name;
+    uint32_t nameLen = strlen(name);
+
+    if (strcmp(".CPK", &name[nameLen - 4]) == 0)
+      movieEntries[numMovieEntries++] = &filelist.entries[i];
   }
+    
+  uint32_t menuSelection = 0;
+  bool movieSelected = false;
 
   while (true) {
     smpc_peripheral_process();
-    smpc_peripheral_digital_port(1, &_digital);
+    smpc_peripheral_digital_port(1, &pad0);
 
     clearConsole();
-    play_film(testEntry, dataCaches, &dataCaches[DATA_CACHE_SIZE]);
+
+    if (!movieSelected) {
+      for (uint32_t i = 0; i < numMovieEntries; ++i) {
+        if (menuSelection == i)
+          dbgio_printf(" > ");
+        else
+          dbgio_printf("   ");
+
+        dbgio_printf("%s\n", movieEntries[i]->name);
+      }
+
+      if (pad0.released.button.down) {
+        menuSelection++;
+        if (menuSelection >= numMovieEntries)
+          menuSelection = 0;
+      } else if (pad0.released.button.up) {
+        menuSelection--;
+        if (menuSelection == 0xFFFFFFFF)
+          menuSelection = numMovieEntries - 1;
+      } else if (pad0.released.button.a || pad0.released.button.start) {
+        movieSelected = true;
+      }
+
+      dbgio_flush();
+    } else {
+      play_film(movieEntries[menuSelection], dataCaches,
+        &dataCaches[DATA_CACHE_SIZE]);
+
+      movieSelected = false;
+    }
 
     dbgio_flush();
     vdp2_sync();
@@ -109,7 +138,7 @@ void user_init(void) {
     VDP2_TVMD_VERT_240);
 
   vdp2_scrn_back_color_set(VDP2_VRAM_ADDR(3, 0x01FFFE),
-    COLOR_RGB1555(1, 0, 3, 15));
+    COLOR_RGB1555(1, 0, 0, 0));
   
   vdp_sync_vblank_in_set(_vblank_in_handler, NULL);
 

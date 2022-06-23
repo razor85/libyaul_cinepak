@@ -438,12 +438,9 @@ inline void writeYUV(uint8_t cy, int16_t cr, int16_t cg, int16_t cb,
   const int b = cy + cb;
 
   // TODO:
-  // uint8_t nr = r < 0 ? 0 : r > 255 ? 255 : r;
-  // uint8_t ng = g < 0 ? 0 : g > 255 ? 255 : g;
-  // uint8_t nb = b < 0 ? 0 : b > 255 ? 255 : b;
-  uint8_t nr = r;
-  uint8_t ng = g;
-  uint8_t nb = b;
+  uint8_t nr = r < 0 ? 0 : r > 255 ? 255 : r;
+  uint8_t ng = g < 0 ? 0 : g > 255 ? 255 : g;
+  uint8_t nb = b < 0 ? 0 : b > 255 ? 255 : b;
 
   vdp2ImagePtr[index] = COLOR_RGB1888_RGB1555(1, nr, ng, nb).raw;
 }
