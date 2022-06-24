@@ -67,12 +67,15 @@ int main() {
         movieSelected = true;
       }
 
-      dbgio_flush();
     } else {
+      clearConsole();
+      dbgio_flush();
+
       play_film(movieEntries[menuSelection], dataCaches,
         &dataCaches[DATA_CACHE_SIZE]);
 
       movieSelected = false;
+      dbgio_dev_font_load();
     }
 
     dbgio_flush();
@@ -95,6 +98,7 @@ void user_init(void) {
   vdp2_scrn_bitmap_format_set(&format);
   vdp2_scrn_priority_set(VDP2_SCRN_NBG0, 7);
   vdp2_scrn_display_set(VDP2_SCRN_NBG0_DISP);
+  vdp2_scrn_scroll_y_set(VDP2_SCRN_NBG0, FIX16(16));
 
   const vdp2_vram_cycp_t vram_cycp = { .pt[0].t0 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
     .pt[0].t1 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
