@@ -95,16 +95,16 @@ typedef struct {
 
 typedef struct {
   strip_codebook_t codebooks[MAX_STRIPS];
-  uint16_t strip;
+  uint32_t strip;
 
-  uint16_t topY;
-  uint16_t writeY;
+  uint32_t topY;
+  uint32_t writeY;
 
-  uint16_t topX;
-  uint16_t writeX;
+  uint32_t topX;
+  uint32_t writeX;
 
-  uint16_t bottomY;
-  uint16_t bottomX;
+  uint32_t bottomY;
+  uint32_t bottomX;
 } stripdata_t;
 
 extern void initialize_film();
