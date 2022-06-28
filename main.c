@@ -5,14 +5,10 @@ static void _vblank_in_handler(void *work __unused);
 
 static void _vblank_out_handler(void *work __unused);
 
-static void _frt_ovi_handler(void);
-
 static smpc_peripheral_digital_t pad0;
 
 static cdfs_filelist_t filelist;
 
-static uint16_t _frt_overflow_count = 0;
-  
 static uint8_t dataCaches[DATA_CACHE_SIZE * 2];
 
 void clearConsole() { dbgio_printf("[H[2J"); }
@@ -96,7 +92,7 @@ void user_init(void) {
     .sf_mode = 0 };
 
   vdp2_scrn_bitmap_format_set(&format);
-  vdp2_scrn_priority_set(VDP2_SCRN_NBG0, 7);
+  vdp2_scrn_priority_set(VDP2_SCRN_NBG0, 3);
   vdp2_scrn_display_set(VDP2_SCRN_NBG0_DISP);
   vdp2_scrn_scroll_y_set(VDP2_SCRN_NBG0, FIX16(16));
 
@@ -148,7 +144,7 @@ void user_init(void) {
 
   vdp_sync_vblank_out_set(_vblank_out_handler, NULL);
 
-  cpu_frt_init(CPU_FRT_CLOCK_DIV_32);
+  cpu_frt_init(CPU_FRT_CLOCK_DIV_128);
 
   dbgio_init();
   dbgio_dev_default_init(DBGIO_DEV_VDP2_ASYNC);
@@ -159,6 +155,8 @@ void user_init(void) {
   cd_block_init();
 
   smpc_peripheral_init();
+
+  initialize_film();
 }
 
 static void _vblank_in_handler(void *work __unused) {
@@ -167,5 +165,3 @@ static void _vblank_in_handler(void *work __unused) {
 static void _vblank_out_handler(void *work __unused) {
   smpc_peripheral_intback_issue();
 }
-
-static void _frt_ovi_handler(void) { _frt_overflow_count++; }

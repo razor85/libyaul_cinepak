@@ -3,7 +3,14 @@
 
 #include "base.h"
 
-#define DATA_CACHE_SIZE (CDFS_SECTOR_SIZE * 40)
+// Maximum frame length is 65536 and we might have audio + video
+#define DATA_CACHE_SIZE (CDFS_SECTOR_SIZE * 64)
+
+// Fixed
+#define FILM_SAMPLE_START_OFFSET 64
+
+#define FILM_SAMPLE_CACHE_COUNT 128
+#define FILM_SAMPLE_CACHE_SIZE (FILM_SAMPLE_CACHE_COUNT * sizeof(film_sample_t))
 
 #define CDFS_DATA_SELECTOR 0
 #define CDFS_SAMPLE_SELECTOR 1
@@ -19,28 +26,25 @@ typedef struct {
   uint32_t length;
   uint32_t info1;
   uint32_t info2;
-} film_sample_t;
-
-#define FILM_SAMPLE_CACHE_COUNT 128
-#define FILM_SAMPLE_CACHE_SIZE (FILM_SAMPLE_CACHE_COUNT * sizeof(film_sample_t))
+} __packed __aligned(4) film_sample_t;
 
 typedef struct {
   // Front and back cache of film samples, front is always used and back
   // is reserved for transfers. When front is completely read we swap.
   film_sample_t cache[2][FILM_SAMPLE_CACHE_COUNT];
-  uint8_t numCacheSamples;
+  uint32_t numCacheSamples;
 
   // 0 or 1
-  uint8_t frontIndex;
+  uint32_t frontIndex;
 
   // Index of the current sample being read.
-  uint8_t currentSample;
+  uint32_t currentSample;
 
   // Number of samples prepared to be copied from cd.
-  uint8_t numCopySamples;
+  uint32_t numCopySamples;
 
   // Index to the sector containing the next set of sample descriptions.
-  uint32_t nextCacheSampleFAD;
+  uint32_t nextCacheSamplePos;
 
   // Number of samples we still need to read to the cache.
   uint32_t numPendingSamples;
@@ -48,46 +52,31 @@ typedef struct {
 } __packed __aligned(4) film_sample_cache_t;
 
 typedef struct {
-  // How many bytes we store in each pointer.
-  uint32_t cacheSize[2];
-
-  // Used like a double buffer, background reads will happen in the buffer
-  // that is not being used.
-  uint8_t *cache[2];
-
-  // 0 or 1.
-  uint8_t frontIndex;
-
-  // How much are we copying from next buffer.
-  uint32_t queuedDataSize;
-
-  // Next read for data.
-  uint32_t nextCacheFAD;
-
+  uint32_t pos;
+  uint32_t relPos;
+  uint32_t endPos;
+  uint32_t size;
+  uint8_t *data;
 } __packed __aligned(4) data_cache_t;
 
 typedef struct {
-  cdfs_filelist_entry_t *fs;
+  uint32_t startFAD;
+  uint32_t size;
+  
+  // Active data cache.
+  uint32_t activeCacheIndex;
 
-  // Pointer used to read the data, it will point either to dataCache[0] or
-  // dataCache[1].
+  // Either point to dataCache[0]->data or dataCache[1]->data.
   uint8_t *dataPtr;
+  data_cache_t dataCaches[2];
 
-  data_cache_t dataCache;
-
+  // Sample descriptions.
   film_sample_cache_t sampleCache;
   
-  // Position relative to the data cache
-  uint32_t relPos;
-
-  // Position relative to the beginning of the file
-  uint32_t pos;
-
   // Will be != 0 if there is more data on the next buffer.
   uint32_t remainingSize;
 
-  // Offset from the beginning of the file where the next data should be.
-  uint32_t nextDataPos;
+  bool eof;
 
 } binary_stream_t;
 
@@ -117,6 +106,8 @@ typedef struct {
   uint16_t bottomY;
   uint16_t bottomX;
 } stripdata_t;
+
+extern void initialize_film();
 
 extern void play_film(cdfs_filelist_entry_t *fsEntry, void *dataCache0,
   void *dataCache1);

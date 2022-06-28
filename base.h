@@ -9,7 +9,7 @@
 
 extern void satAssert(const char *filename, int line, const char *msg);
 
-// #define HAS_DEBUG_REQUIRE_FUNCTIONS
+#define HAS_DEBUG_REQUIRE_FUNCTIONS
 #ifdef HAS_DEBUG_REQUIRE_FUNCTIONS
 #define __STRINGIFY(x) #x
 #define __TOSTRING(x) __STRINGIFY(x)
