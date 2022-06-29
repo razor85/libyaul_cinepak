@@ -290,84 +290,77 @@ inline codebook_t* stripdata_getV4Codebook(stripdata_t *data) {
 }
 
 // stream must be exactly at the start of the sample descriptions
-void film_sample_cache_new(film_sample_cache_t *cache, binary_stream_t *stream,
-  uint32_t totalNumSamples) {
-
+void film_sample_cache_new(binary_stream_t *stream, uint32_t totalNumSamples) {
   // We only read a single sector, so check how many samples we have there.
   const uint32_t samplesInitialPos = stream_pos(stream);
-  const uint32_t initialCacheSamples = (CDFS_SECTOR_SIZE - samplesInitialPos) /
-    sizeof(film_sample_t);
+  DEBUG_REQUIRE_EQ(FILM_SAMPLE_START_OFFSET, samplesInitialPos);
 
-  cache->frontIndex = 0;
-  cache->currentSample = 0;
-  cache->numCopySamples = 0;
-  cache->numCacheSamples = MIN(initialCacheSamples, totalNumSamples);
-  cache->numPendingSamples = totalNumSamples - cache->numCacheSamples;
+  const uint32_t numCacheSamples = MIN((stream->size - samplesInitialPos) /
+    sizeof(film_sample_t), totalNumSamples);
+  
 
-  dbgio_printf("Started with %d samples\n", cache->numCacheSamples);
+  if (numCacheSamples > stream->sampleCache.numSamples) {
+    clearConsole();
+    dbgio_printf("Insufficient number of cached samples: expected %d, got %d\n",
+      numCacheSamples, stream->sampleCache.numSamples);
+    dbgio_flush();
 
-  uint32_t samplesSize = cache->numCacheSamples * sizeof(film_sample_t);
-  stream_readbytes(stream, cache->cache[0], samplesSize);
+    VDP_INFLOOP();
+  }
 
-  if (cache->numPendingSamples) {
-    cache->nextCacheSamplePos = stream_pos(stream);
-    cache->numCopySamples = MIN(cache->numPendingSamples,
-      FILM_SAMPLE_CACHE_COUNT);
+  const uint32_t readBufferSize = CDFS_SECTOR_SIZE * 4;
+  const uint32_t readBufferSizeInSamples = readBufferSize /
+    sizeof(cd_film_sample_t);
 
-    cache->numPendingSamples -= cache->numCopySamples;
+  // Leave room for the initial offset
+  uint8_t readBuffer[readBufferSize + FILM_SAMPLE_START_OFFSET];
+
+  film_sample_t *outputSamples = stream->sampleCache.samples;
+
+  uint32_t readSamples = numCacheSamples;
+  uint32_t readBytes = 0;
+
+  while (readSamples > 0) {
     const uint32_t nextFAD = stream->startFAD +
-      numSectorsForIndex(cache->nextCacheSamplePos);
+      numSectorsForIndex(samplesInitialPos + readBytes);
 
-    queueDiskRead(CDFS_SAMPLE_SELECTOR, nextFAD,
-      cache->numCopySamples * sizeof(film_sample_t));
-  }
-}
+    const uint32_t toReadSamples = MIN(readBufferSizeInSamples, readSamples);
+    const uint32_t toRead = (readBytes == 0) ?
+      (toReadSamples * sizeof(cd_film_sample_t) + samplesInitialPos)
+      :
+      (toReadSamples * sizeof(cd_film_sample_t));
 
-// Returns NULL if there are no more samples
-film_sample_t *film_sample_get_next_sample(binary_stream_t *stream) {
-  // Time to swap?
-  film_sample_cache_t *cache = &stream->sampleCache;
-  if (cache->currentSample >= cache->numCacheSamples) {
-    // If there is nothing else to read and no data available on the back
-    // buffer, return NULL.
-    if (!cache->numPendingSamples && !cache->numCopySamples)
-      return NULL;
+    queueDiskRead(CDFS_SAMPLE_SELECTOR, nextFAD, toRead);
+    readQueuedCopy(CDFS_SAMPLE_SELECTOR, readBuffer, toRead, true);
 
-    // Swap and schedule the new transfer.
-    cache->frontIndex ^= 1;
-    cache->currentSample = 0;
-    cache->numCacheSamples = cache->numCopySamples;
+    cd_film_sample_t
+      *readBufferPtr = (cd_film_sample_t *)&readBuffer[samplesInitialPos];
 
-    // TODO: replace by DMA
-    if (cache->numCopySamples) {
-      const uint32_t copySize = cache->numCopySamples * sizeof(film_sample_t);
-      readQueuedCopy(CDFS_SAMPLE_SELECTOR, &cache->cache[cache->frontIndex],
-        copySize, true);
+    for (uint32_t i = 0; i < toReadSamples; ++i) {
+      cd_film_sample_t *sample = &readBufferPtr[i];
+      const bool isAudio = (sample->info1 == 0xFFFFFFFF);
 
-      cache->nextCacheSamplePos += copySize;
-      cache->numCopySamples = 0;
+      film_sample_t newSample;
+      if (isAudio) {
+        DEBUG_REQUIRE_LE(sample->length, 0x7FFFFFFF);
+        newSample = FILM_SAMPLE_CHECK_BIT | sample->length;
+      } else {
+        DEBUG_REQUIRE_LE(sample->info2, 0x7FFFFFFF);
+        newSample = sample->info2;
+      }
+
+      *outputSamples = newSample;
+      outputSamples++;
     }
 
-    // Get new samples from the disk
-    if (cache->numPendingSamples > 0) {
-      cache->numCopySamples = MIN(cache->numPendingSamples,
-        FILM_SAMPLE_CACHE_COUNT);
-
-      cache->numPendingSamples -= cache->numCopySamples;
-      const uint32_t nextFAD = stream->startFAD +
-        numSectorsForIndex(cache->nextCacheSamplePos);
-
-      const uint32_t queuedSize = cache->numCopySamples * sizeof(film_sample_t);
-      queueDiskRead(CDFS_SAMPLE_SELECTOR, nextFAD, queuedSize);
-    }
+    readSamples -= toReadSamples;
+    readBytes += toRead;
   }
-    
-  return &cache->cache[cache->frontIndex][cache->currentSample++];
 }
 
 // Return the current sample, don't do anything else.
-film_sample_t *film_sample_get_sample(film_sample_cache_t *cache) {
-  return &cache->cache[cache->frontIndex][cache->currentSample];
+inline film_sample_t film_sample_get_next_sample(film_sample_cache_t *cache) {
+  return cache->samples[cache->currentSample++];
 }
 
 void data_cache_fetch_first_sample_data(binary_stream_t *stream,
@@ -425,10 +418,8 @@ uint32_t stream_cache_size(binary_stream_t *stream) {
 }
 
 void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
-  void *dataCache0, void *dataCache1) {
-
-  const uint32_t initialDataSize = MIN(entry->size,
-    FILM_SAMPLE_CACHE_SIZE + FILM_SAMPLE_START_OFFSET);
+  void *dataCache0, void *dataCache1, void *sampleCache,
+  uint32_t sampleCacheSize) {
 
   stream->startFAD = entry->starting_fad;
   stream->size = entry->size;
@@ -439,7 +430,7 @@ void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
 
   stream->dataCaches[0].pos = 0;
   stream->dataCaches[0].relPos = 0;
-  stream->dataCaches[0].size = initialDataSize;
+  stream->dataCaches[0].size = CDFS_SECTOR_SIZE;
   stream->dataCaches[0].data = (uint8_t*) dataCache0;
 
   stream->dataCaches[1].pos = 0;
@@ -447,13 +438,15 @@ void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
   stream->dataCaches[1].size = 0;
   stream->dataCaches[1].data = (uint8_t*) dataCache1;
 
-  memset(&stream->sampleCache, 0, sizeof(film_sample_cache_t));
+  stream->sampleCache.samples = (film_sample_t *)sampleCache;
+  stream->sampleCache.numSamples = sampleCacheSize / sizeof(film_sample_t);
+  stream->sampleCache.currentSample = 0;
 
   stream->remainingSize = stream->size;
   stream->eof = false;
 
-  int status = cd_block_sectors_read(entry->starting_fad, dataCache0,
-    initialDataSize);
+  const int status = cd_block_sectors_read(entry->starting_fad, dataCache0,
+    CDFS_SECTOR_SIZE);
 
   DEBUG_REQUIRE_EQ(status, 0);
 }
@@ -479,7 +472,9 @@ void stream_readbytes(binary_stream_t *stream, void *tmpDst, uint32_t len) {
 
     data_cache_t *backCache = &stream->dataCaches[!stream->activeCacheIndex];
     if (stream->remainingSize) {
-      readQueuedCopy(CDFS_DATA_SELECTOR, backCache->data, backCache->size, true);
+      readQueuedCopy(CDFS_DATA_SELECTOR, backCache->data, backCache->size,
+        true);
+
       stream->remainingSize -= backCache->size;
       
       // Swap buffers.
@@ -536,26 +531,12 @@ inline void stream_skip(binary_stream_t *stream, uint32_t len) {
   stream_readbytes(stream, NULL, len);
 }
 
-inline bool film_sample_is_video(const film_sample_t *sample) {
-  return sample->info1 != 0xFFFFFFFF;
+inline bool film_sample_is_video(const film_sample_t sample) {
+  return (sample & FILM_SAMPLE_CHECK_BIT) == 0;
 }
 
-inline bool film_sample_is_audio(const film_sample_t *sample) {
-  return !film_sample_is_video(sample);
-}
-
-inline bool film_sample_is_keyFrame(const film_sample_t *sample) {
-  return film_sample_is_video(sample) && (!(sample->info1 & 0x1));
-}
-
-void film_read_sample(film_sample_t *sample) {
-  LOGGER("Found %s sample at %d offset and %d length (infos: 0x%X [%d] "
-         "/ 0x%X [%d])\n",
-    film_sample_is_audio(sample) ? "audio" : "video", sample->offset,
-    sample->length, sample->info1, sample->info1, sample->info2, sample->info2);
-
-  if (film_sample_is_video(sample))
-    LOGGER("  KeyFrame = %d\n", film_sample_is_keyFrame(sample));
+inline bool film_sample_is_audio(const film_sample_t sample) {
+  return (sample & FILM_SAMPLE_CHECK_BIT) != 0;
 }
 
 uint16_t *vdp2ImagePtr = (uint16_t *)VDP2_VRAM_ADDR(0, 16 * VDP2_WIDTH);
@@ -1084,9 +1065,10 @@ void parseVideo(binary_stream_t *stream) {
   }
 }
     
-void parseSample(const film_sample_t *sample, binary_stream_t *stream) {
+void parseSample(const film_sample_t sample, binary_stream_t *stream) {
   if (film_sample_is_audio(sample)) {
-    stream_skip(stream, sample->length);
+    const uint32_t length = sample & ~FILM_SAMPLE_CHECK_BIT;
+    stream_skip(stream, length);
   } else {
     parseVideo(stream);
   }
@@ -1100,8 +1082,8 @@ void initialize_film() {
   DEBUG_REQUIRE_EQ(status, 0);
 }
 
-void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
-  void *dataCache1) {
+void play_film(cdfs_filelist_entry_t *entry, void *dataCache0, void *dataCache1,
+  void *sampleCache, uint32_t sampleCacheSize) {
 
   clearConsole();
   stripdata_new(&stripData);
@@ -1112,7 +1094,8 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
 
   // Start reading the file
   binary_stream_t stream;
-  stream_new(&stream, entry, dataCache0, dataCache1);
+  stream_new(&stream, entry, dataCache0, dataCache1, sampleCache,
+    sampleCacheSize);
 
   const uint32_t asciiFilm = stream_read32(&stream);
   DEBUG_REQUIRE_EQ(asciiFilm, ASCII_FILM);
@@ -1167,7 +1150,7 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
   const uint32_t sampleDataPos = filmHeaderLength;
 
   // Must be called just before the sample list
-  film_sample_cache_new(&stream.sampleCache, &stream, numSamples);
+  film_sample_cache_new(&stream, numSamples);
   
   // Queue up first data reading before we can start to process the frames.
   data_cache_fetch_first_sample_data(&stream, sampleDataPos);
@@ -1198,9 +1181,7 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
       frtTimerStart(timeEllapsed - 1000);
     }
 
-    film_sample_t* sample = film_sample_get_next_sample(&stream);
-    DEBUG_REQUIRE_NE(sample, NULL);
-
+    film_sample_t sample = film_sample_get_next_sample(&stream.sampleCache);
     parseSample(sample, &stream);
     samplesInSecCount++;
 

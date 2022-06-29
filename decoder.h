@@ -6,11 +6,8 @@
 // Maximum frame length is 65536 and we might have audio + video
 #define DATA_CACHE_SIZE (CDFS_SECTOR_SIZE * 64)
 
-// Fixed
 #define FILM_SAMPLE_START_OFFSET 64
-
-#define FILM_SAMPLE_CACHE_COUNT 128
-#define FILM_SAMPLE_CACHE_SIZE (FILM_SAMPLE_CACHE_COUNT * sizeof(film_sample_t))
+#define FILM_SAMPLE_CHECK_BIT 0x80000000
 
 #define CDFS_DATA_SELECTOR 0
 #define CDFS_SAMPLE_SELECTOR 1
@@ -21,35 +18,25 @@
 #define ASCII_CVID 1668704612 // 'cvid'
 #define ASCII_STAB 1398030658 // 'STAB'
 
+// Sample data can be stored as a single uint32_t with the MSB telling us if its
+// a video (0) or audio sample (1). If it is a video sample, the rest of the
+// data holds the 'info2' field from the STAB data and if its audio, it holds
+// the sample length.
+typedef uint32_t film_sample_t;
+
+// A sample stored in the STAB table is:
 typedef struct {
   uint32_t offset;
   uint32_t length;
   uint32_t info1;
   uint32_t info2;
-} __packed __aligned(4) film_sample_t;
+} __packed __aligned(4) cd_film_sample_t;
 
 typedef struct {
-  // Front and back cache of film samples, front is always used and back
-  // is reserved for transfers. When front is completely read we swap.
-  film_sample_t cache[2][FILM_SAMPLE_CACHE_COUNT];
-  uint32_t numCacheSamples;
-
-  // 0 or 1
-  uint32_t frontIndex;
-
-  // Index of the current sample being read.
+  film_sample_t *samples;
+  uint32_t numSamples;
   uint32_t currentSample;
-
-  // Number of samples prepared to be copied from cd.
-  uint32_t numCopySamples;
-
-  // Index to the sector containing the next set of sample descriptions.
-  uint32_t nextCacheSamplePos;
-
-  // Number of samples we still need to read to the cache.
-  uint32_t numPendingSamples;
-
-} __packed __aligned(4) film_sample_cache_t;
+} film_sample_cache_t;
 
 typedef struct {
   uint32_t pos;
@@ -110,6 +97,6 @@ typedef struct {
 extern void initialize_film();
 
 extern void play_film(cdfs_filelist_entry_t *fsEntry, void *dataCache0,
-  void *dataCache1);
+  void *dataCache1, void* sampleCache, uint32_t sampleCacheSize);
 
 #endif // DECODER_H
