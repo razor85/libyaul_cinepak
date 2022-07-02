@@ -7,10 +7,9 @@
 #define DATA_CACHE_SIZE (CDFS_SECTOR_SIZE * 64)
 
 #define FILM_SAMPLE_START_OFFSET 64
-#define FILM_SAMPLE_CHECK_BIT 0x80000000
 
-#define CDFS_DATA_SELECTOR 0
-#define CDFS_SAMPLE_SELECTOR 1
+// 0 if video, 1 if audio.
+#define FILM_SAMPLE_CHECK_BIT 0x80000000
 
 #define ASCII_FILM 1179208781 // 'FILM'
 #define ASCII_1d09 825110585  // '1.09'
@@ -37,32 +36,28 @@ typedef struct {
   uint32_t numSamples;
   uint32_t currentSample;
 } film_sample_cache_t;
+  
+typedef union {
+  uint8_t b[4];
+  uint32_t raw;
+} __packed __aligned(4) tmp_cd_data;
 
 typedef struct {
   uint32_t pos;
   uint32_t relPos;
-  uint32_t endPos;
+  tmp_cd_data tmp;
+  uint32_t tmpPendingBytes;
   uint32_t size;
-  uint8_t *data;
 } __packed __aligned(4) data_cache_t;
 
 typedef struct {
   uint32_t startFAD;
   uint32_t size;
   
-  // Active data cache.
-  uint32_t activeCacheIndex;
+  data_cache_t dataCache;
 
-  // Either point to dataCache[0]->data or dataCache[1]->data.
-  uint8_t *dataPtr;
-  data_cache_t dataCaches[2];
-
-  // Sample descriptions.
   film_sample_cache_t sampleCache;
   
-  // Will be != 0 if there is more data on the next buffer.
-  uint32_t remainingSize;
-
   bool eof;
 
 } binary_stream_t;

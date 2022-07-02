@@ -25,4 +25,7 @@ IP_1ST_READ_ADDR:= 0x06004000
 M68K_PROGRAM:= 
 M68K_OBJECTS:=
 
+post-build-iso:
+	printf "20: 542D313830303347" | xxd -r - cinepak_player.iso
+
 include $(YAUL_INSTALL_ROOT)/share/post.common.mk

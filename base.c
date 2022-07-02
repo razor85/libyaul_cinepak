@@ -11,7 +11,7 @@ void satAssert(const char *filename, int line, const char *msg) {
       [debug2] "r" (debug2)
   );
 
-  char *lwRam = (char *)LWRAM(0);
+  char *lwRam = (char *)LWRAM(8);
   
   if (msg != NULL) {
     sprintf(lwRam, "%s\n", msg);

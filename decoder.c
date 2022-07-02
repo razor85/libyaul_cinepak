@@ -34,11 +34,6 @@ typedef struct {
   uint32_t len;
 } cache_purge_area_t;
 
-// Dma operations
-volatile bool dmaTransfering[2] = { false, false };
-volatile bool dmaPendingCdDelete[2] = { false, false };
-volatile cache_purge_area_t dmaPendingCachePurge[2];
-
 // Timer
 uint16_t frtOverflowCount = 0;
 const uint32_t frtTimerDiv = CPU_FRT_NTSC_320_128_COUNT_1MS;
@@ -50,86 +45,7 @@ uint8_t tmpBuffer[TMP_BUFFER_SIZE];
 #define HIRQ 0x0008UL
 #define DRDY 0x0002 /* Data transfer preparations complete */
 #define EHST 0x0080 /* Host I/O processing complete */
-#define DTR 0x0000UL
-#define CD_STATUS_TIMEOUT 0xAA
-
-void dmacDone(void *cdBufferPtr) {
-  const uint32_t cdBuffer = (uint32_t)cdBufferPtr;
-  if (dmaPendingCdDelete[cdBuffer]) {
-    const int status = cd_block_cmd_data_transfer_end();
-    DEBUG_REQUIRE_EQ(status, 0);
-
-    dmaPendingCdDelete[cdBuffer] = false;
-  }
-  
-  dmaTransfering[cdBuffer] = false;
-  cpu_cache_area_purge(dmaPendingCachePurge[cdBuffer].addr, 
-    dmaPendingCachePurge[cdBuffer].len);
-}
-
-int hirqFlagWait(uint16_t flag) {
-  volatile uint32_t i;
-
-  for (i = 0; i < 0x240000; ++i) {
-    if (MEMORY_READ(16, CD_BLOCK(HIRQ)) & flag) {
-      return 0;
-    }
-  }
-
-  return -1;
-}
-
-bool cdBlockTransferData(uint8_t bufferNumber, uint8_t *outputBuffer,
-  uint32_t length, bool waitChannel) {
-
-  DEBUG_REQUIRE(outputBuffer != NULL);
-  DEBUG_REQUIRE(length > 0);
-  const uint32_t sectors = (length + (CDFS_SECTOR_SIZE - 1)) / CDFS_SECTOR_SIZE;
-  
-  cpu_dmac_channel_wait(0);
-
-  /* Start transfer */
-  int status = cd_block_cmd_sector_data_get_delete(0, bufferNumber, sectors);
-  DEBUG_REQUIRE_EQ(status, 0);
-
-  // If waiting expire, generate a timeout
-  if ((hirqFlagWait(DRDY | EHST)) != 0)
-    return false;
-
-  /* Transfer from register to user space */
-  const uint32_t ihrParam = bufferNumber;
-  const cpu_dmac_bus_mode_t busMode = waitChannel ?
-    CPU_DMAC_BUS_MODE_BURST :
-    CPU_DMAC_BUS_MODE_CYCLE_STEAL;
-
-  cpu_dmac_cfg_t cfg = {
-    .channel = 0,
-    .src_mode = CPU_DMAC_SOURCE_FIXED,
-    .dst_mode = CPU_DMAC_DESTINATION_INCREMENT,
-    .stride = CPU_DMAC_STRIDE_2_BYTES,
-    .bus_mode = busMode,
-    .src = CD_BLOCK(DTR),
-    .dst = (uint32_t)outputBuffer,
-    .len = length,
-    .ihr = dmacDone,
-    .ihr_work = (void *)ihrParam,
-  };
-
-  dmaTransfering[bufferNumber] = true;
-  dmaPendingCdDelete[bufferNumber] = true;
-  dmaPendingCachePurge[bufferNumber].addr = outputBuffer;
-  dmaPendingCachePurge[bufferNumber].len = length;
-
-  cpu_dmac_channel_config_set(&cfg);
-  cpu_dmac_channel_start(0);
-
-  if (waitChannel) {
-    while (dmaTransfering[bufferNumber])
-      cpu_instr_nop();
-  }
-
-  return true;
-}
+#define CD_BLOCK_DATA 0x25818000UL
 
 uint8_t stream_read8(binary_stream_t *);
 uint16_t stream_read16(binary_stream_t *);
@@ -139,7 +55,6 @@ void stream_readbytes(binary_stream_t *, void *, uint32_t);
 void stream_skip(binary_stream_t *, uint32_t);
 uint32_t stream_pos(binary_stream_t *stream);
 uint32_t stream_relPos(binary_stream_t *stream);
-uint32_t stream_cache_size(binary_stream_t *stream);
 
 void frtOviHandler() { frtOverflowCount++; }
 
@@ -153,84 +68,58 @@ static uint32_t frtTimerEllapsed() {
   return ticks / frtTimerDiv;
 }
 
+void md5PrintResult(MD5_CTX *md5) {
+  unsigned char md5Result[2048];
+  memset(md5Result, 0, 2048);
+  MD5_Final(md5Result, md5);
+
+  dbgio_printf("MD5\n");
+  for (uint32_t i = 0; i < MD5_DIGEST_LENGTH; i++)
+    dbgio_printf("%02x", md5Result[i]);
+}
+
 inline void clearConsole() { dbgio_printf("[H[2J"); }
+
+void waitForCD() {
+  cd_block_status_t status;
+  while (true) {
+    if (!cd_block_cmd_status_get(&status)) {
+      DEBUG_REQUIRE_NE(status.cd_status, CD_STATUS_ERROR);
+      DEBUG_REQUIRE_NE(status.cd_status, CD_STATUS_FATAL);
+
+      if (status.cd_status == CD_STATUS_PAUSE)
+        break;
+    }
+  }
+}
 
 inline uint32_t numSectorsForSize(uint32_t size) {
   // Past size so we get the complete number of sectors for the whole data.
   return (size + (CDFS_SECTOR_SIZE - 1)) / CDFS_SECTOR_SIZE;
 }
 
-inline uint32_t numSectorsForIndex(uint32_t size) {
-  // We get the number of sectors to reach the data.
-  return size / CDFS_SECTOR_SIZE;
-}
-
-int waitForCdData() {
-  for (volatile uint32_t i = 0; i < 0x240000; ++i) {
-    if (MEMORY_READ(16, CD_BLOCK(HIRQ)) & (DRDY | EHST))
-      return 0;
-  }
-
-  return -1;
-}
-
-void waitForCD() {
-  cd_block_status_t status;
-  while (true) {
-    if (cd_block_cmd_status_get(&status) != 0)
-      continue;
-
-    DEBUG_REQUIRE_NE(status.cd_status, CD_STATUS_ERROR);
-    DEBUG_REQUIRE_NE(status.cd_status, CD_STATUS_FATAL);
-
-    if (status.cd_status == CD_STATUS_PAUSE)
-      break;
-  }
-}
-
-void queueDiskRead(uint8_t selector, uint32_t fad, uint32_t size) {
+void queueDiskRead(uint32_t fad, uint32_t size) {
   DEBUG_REQUIRE_NE(size, 0);
+  DEBUG_REQUIRE_EQ(size % 4, 0);
   waitForCD();
 
-  int status = cd_block_cmd_selector_reset(0, selector);
+  int status = cd_block_cmd_selector_reset(0, 0);
   DEBUG_REQUIRE_EQ(status, 0);
 
-  const uint32_t numSectors = numSectorsForSize(size);
-  status = cd_block_cmd_filter_range_set(selector, fad, numSectors);
+  status = cd_block_cmd_cd_dev_connection_set(0);
   DEBUG_REQUIRE_EQ(status, 0);
 
-  status = cd_block_cmd_filter_connection_set(selector, 0, selector, 0xFF);
-  DEBUG_REQUIRE_EQ(status, 0);
-
-  status = cd_block_cmd_cd_dev_connection_set(selector);
-  DEBUG_REQUIRE_EQ(status, 0);
-
-  status = cd_block_cmd_disk_play(0, fad, numSectors);
+  status = cd_block_cmd_disk_play(0, fad, numSectorsForSize(size));
   DEBUG_REQUIRE_EQ(status, 0);
 }
 
-void readQueuedCopy(uint8_t cdBuffer, void *destination, uint32_t size,
-  bool waitCopy) {
+static inline uint32_t getSectorsReady() {
+  uint32_t sectorsReady;
+  do {
+    sectorsReady = cd_block_cmd_sector_number_get(0);
+  } while (sectorsReady == 0);
 
-  uint8_t *outputBuffer = (uint8_t *) destination;
-
-  DEBUG_REQUIRE_EQ(dmaTransfering[cdBuffer], false);
-  DEBUG_REQUIRE_EQ(dmaPendingCdDelete[cdBuffer], false);
-  
-  uint32_t bytesMissing = size;
-  while (bytesMissing) {
-    /* Wait until there's data ready */
-    uint32_t sectorsReady;
-    do {
-      sectorsReady = cd_block_cmd_sector_number_get(cdBuffer);
-    } while (sectorsReady == 0);
-
-    const uint32_t toRead = MIN(sectorsReady * CDFS_SECTOR_SIZE, bytesMissing);
-    if (cdBlockTransferData(cdBuffer, outputBuffer, toRead, waitCopy)) {
-      outputBuffer += toRead;
-      bytesMissing -= toRead;
-    }
-  }
+  return sectorsReady;
 }
 
 inline void codebook_new(codebook_t *cb, binary_stream_t *stream) {
@@ -269,8 +158,8 @@ void stripdata_copyLastCodebooks(stripdata_t *data) {
     .dst_mode = CPU_DMAC_DESTINATION_INCREMENT,
     .stride = CPU_DMAC_STRIDE_16_BYTES,
     .bus_mode = CPU_DMAC_BUS_MODE_BURST,
-    .src = (uint32_t) &data->codebooks[data->strip - 1],
-    .dst = (uint32_t) &data->codebooks[data->strip],
+    .src = CPU_CACHE_THROUGH | (uint32_t)&data->codebooks[data->strip - 1],
+    .dst = CPU_CACHE_THROUGH | (uint32_t)&data->codebooks[data->strip],
     .len = sizeof(strip_codebook_t),
     .ihr = dmaCopyBlocksDone,
     .ihr_work = NULL,
@@ -295,126 +184,56 @@ void film_sample_cache_new(binary_stream_t *stream, uint32_t totalNumSamples) {
   const uint32_t samplesInitialPos = stream_pos(stream);
   DEBUG_REQUIRE_EQ(FILM_SAMPLE_START_OFFSET, samplesInitialPos);
 
-  const uint32_t numCacheSamples = MIN((stream->size - samplesInitialPos) /
-    sizeof(film_sample_t), totalNumSamples);
-  
-
-  if (numCacheSamples > stream->sampleCache.numSamples) {
+  if (totalNumSamples > stream->sampleCache.numSamples) {
     clearConsole();
-    dbgio_printf("Insufficient number of cached samples: expected %d, got %d\n",
-      numCacheSamples, stream->sampleCache.numSamples);
+    dbgio_printf("Insufficient number of cached samples: expected %d (%d "
+                 "bytes), got %d (%d bytes)\n",
+      totalNumSamples, totalNumSamples * sizeof(film_sample_t),
+      stream->sampleCache.numSamples,
+      stream->sampleCache.numSamples * sizeof(film_sample_t));
+
     dbgio_flush();
+    vdp2_sync();
+    vdp2_sync_wait();
 
     VDP_INFLOOP();
   }
 
-  const uint32_t readBufferSize = CDFS_SECTOR_SIZE * 4;
-  const uint32_t readBufferSizeInSamples = readBufferSize /
-    sizeof(cd_film_sample_t);
-
-  // Leave room for the initial offset
-  uint8_t readBuffer[readBufferSize + FILM_SAMPLE_START_OFFSET];
-
+  uint32_t missingSamples = totalNumSamples;
   film_sample_t *outputSamples = stream->sampleCache.samples;
 
-  uint32_t readSamples = numCacheSamples;
-  uint32_t readBytes = 0;
+  while (missingSamples) {
+    cd_film_sample_t sample;
+    stream_readbytes(stream, &sample, sizeof(cd_film_sample_t));
+    
+    const bool isAudio = (sample.info1 == 0xFFFFFFFF);
 
-  while (readSamples > 0) {
-    const uint32_t nextFAD = stream->startFAD +
-      numSectorsForIndex(samplesInitialPos + readBytes);
-
-    const uint32_t toReadSamples = MIN(readBufferSizeInSamples, readSamples);
-    const uint32_t toRead = (readBytes == 0) ?
-      (toReadSamples * sizeof(cd_film_sample_t) + samplesInitialPos)
-      :
-      (toReadSamples * sizeof(cd_film_sample_t));
-
-    queueDiskRead(CDFS_SAMPLE_SELECTOR, nextFAD, toRead);
-    readQueuedCopy(CDFS_SAMPLE_SELECTOR, readBuffer, toRead, true);
-
-    cd_film_sample_t
-      *readBufferPtr = (cd_film_sample_t *)&readBuffer[samplesInitialPos];
-
-    for (uint32_t i = 0; i < toReadSamples; ++i) {
-      cd_film_sample_t *sample = &readBufferPtr[i];
-      const bool isAudio = (sample->info1 == 0xFFFFFFFF);
-
-      film_sample_t newSample;
-      if (isAudio) {
-        DEBUG_REQUIRE_LE(sample->length, 0x7FFFFFFF);
-        newSample = FILM_SAMPLE_CHECK_BIT | sample->length;
-      } else {
-        DEBUG_REQUIRE_LE(sample->info2, 0x7FFFFFFF);
-        newSample = sample->info2;
-      }
-
-      *outputSamples = newSample;
-      outputSamples++;
+    film_sample_t *newSample = outputSamples;
+    if (isAudio) {
+      DEBUG_REQUIRE_LE(sample.length, 0x7FFFFFFF);
+      *newSample = FILM_SAMPLE_CHECK_BIT | sample.length;
+    } else {
+      DEBUG_REQUIRE_LE(sample.info2, 0x7FFFFFFF);
+      *newSample = sample.info2;
     }
 
-    readSamples -= toReadSamples;
-    readBytes += toRead;
+    outputSamples++;
+    missingSamples--;
   }
 }
 
 // Return the current sample, don't do anything else.
 inline film_sample_t film_sample_get_next_sample(film_sample_cache_t *cache) {
+  DEBUG_REQUIRE_LT(cache->currentSample, cache->numSamples);
   return cache->samples[cache->currentSample++];
 }
 
-void data_cache_fetch_first_sample_data(binary_stream_t *stream,
-  const uint32_t sampleDataPos) {
-    
-  // First fetch is special because it blocks and completely discards the
-  // content of the previous buffer.
-  DEBUG_REQUIRE_GE(stream->size, sampleDataPos);
-  const uint32_t numSectors = numSectorsForIndex(sampleDataPos);
-  const uint32_t readFAD = stream->startFAD + numSectors;
-
-  // Queue up copy
-  uint32_t toRead = MIN(stream->size - sampleDataPos, DATA_CACHE_SIZE);
-  queueDiskRead(CDFS_DATA_SELECTOR, readFAD, toRead);
-  readQueuedCopy(CDFS_DATA_SELECTOR, stream->dataPtr, toRead, true);
-
-  data_cache_t *cache = &stream->dataCaches[0];
-  cache->pos = sampleDataPos;
-  cache->relPos = sampleDataPos % CDFS_SECTOR_SIZE;
-  cache->endPos = (numSectors * CDFS_SECTOR_SIZE) + toRead;
-  cache->size = toRead;
-  
-  stream->remainingSize = stream->size - cache->endPos;
-}
-
-void data_cache_fetch_next_sample_data(binary_stream_t *stream) {
-  if (!stream->remainingSize)
-    return;
-
-  data_cache_t *frontCache = &stream->dataCaches[stream->activeCacheIndex];
-  data_cache_t *backCache = &stream->dataCaches[stream->activeCacheIndex ^ 1];
-
-  const uint32_t numSectors = numSectorsForIndex(frontCache->endPos);
-  const uint32_t startFAD = stream->startFAD + numSectors;
-
-  uint32_t toRead = MIN(stream->size - frontCache->endPos, DATA_CACHE_SIZE);
-  queueDiskRead(CDFS_DATA_SELECTOR, startFAD, toRead);
-  
-  backCache->pos = frontCache->endPos;
-  backCache->relPos = frontCache->endPos % CDFS_SECTOR_SIZE;
-  backCache->endPos = (numSectors * CDFS_SECTOR_SIZE) + toRead;
-  backCache->size = toRead;
-}
-
 uint32_t stream_pos(binary_stream_t *stream) {
-  return stream->dataCaches[stream->activeCacheIndex].pos;
+  return stream->dataCache.pos;
 }
 
 uint32_t stream_relPos(binary_stream_t *stream) {
-  return stream->dataCaches[stream->activeCacheIndex].relPos;
-}
-
-uint32_t stream_cache_size(binary_stream_t *stream) {
-  return stream->dataCaches[stream->activeCacheIndex].size;
+  return stream->dataCache.relPos;
 }
 
 void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
@@ -424,78 +243,88 @@ void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
   stream->startFAD = entry->starting_fad;
   stream->size = entry->size;
 
-  stream->activeCacheIndex = 0;
-
-  stream->dataPtr = (uint8_t*) dataCache0;
-
-  stream->dataCaches[0].pos = 0;
-  stream->dataCaches[0].relPos = 0;
-  stream->dataCaches[0].size = CDFS_SECTOR_SIZE;
-  stream->dataCaches[0].data = (uint8_t*) dataCache0;
-
-  stream->dataCaches[1].pos = 0;
-  stream->dataCaches[1].relPos = 0;
-  stream->dataCaches[1].size = 0;
-  stream->dataCaches[1].data = (uint8_t*) dataCache1;
-
   stream->sampleCache.samples = (film_sample_t *)sampleCache;
   stream->sampleCache.numSamples = sampleCacheSize / sizeof(film_sample_t);
   stream->sampleCache.currentSample = 0;
-
-  stream->remainingSize = stream->size;
   stream->eof = false;
 
-  const int status = cd_block_sectors_read(entry->starting_fad, dataCache0,
-    CDFS_SECTOR_SIZE);
-
+  stream->dataCache.pos = 0;
+  stream->dataCache.relPos = 0;
+  stream->dataCache.tmp.raw = 0;
+  stream->dataCache.tmpPendingBytes = 0;
+      
+  const uint32_t sectorsReady = getSectorsReady();
+  stream->dataCache.size = sectorsReady * CDFS_SECTOR_SIZE;
+      
+  int status = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
   DEBUG_REQUIRE_EQ(status, 0);
+
+  // If waiting expire, keep trying
+  while (!(MEMORY_READ(16, CD_BLOCK(HIRQ)) & (DRDY | EHST)))
+    cpu_instr_nop();
 }
 
 void stream_readbytes(binary_stream_t *stream, void *tmpDst, uint32_t len) {
   DEBUG_REQUIRE_EQ(stream->eof, false);
   uint8_t *dst = (uint8_t *)tmpDst;
 
-  // Swap buffers 
-  data_cache_t *frontCache = &stream->dataCaches[stream->activeCacheIndex];
-  while (frontCache->relPos + len >= frontCache->size) {
-    const uint32_t skipBufferSize = (frontCache->size - frontCache->relPos);
-    DEBUG_REQUIRE_GT(skipBufferSize, 0);
+  uint32_t missingBytes = len;
+  while (missingBytes) {
+    DEBUG_REQUIRE_LT(stream->dataCache.pos, stream->size);
 
-    if (dst != NULL) {
-      memcpy(dst, &frontCache->data[frontCache->relPos], skipBufferSize);
-      dst += skipBufferSize;
+    while (stream->dataCache.tmpPendingBytes && missingBytes > 0) {
+      if (dst != NULL)
+        *dst++ = stream->dataCache.tmp.b[0];
+
+      stream->dataCache.pos++;
+      stream->dataCache.relPos++;
+      stream->dataCache.tmp.raw <<= 8;
+      stream->dataCache.tmpPendingBytes--;
+      missingBytes--;
     }
-    
-    len -= skipBufferSize;
-    frontCache->relPos += skipBufferSize;
-    frontCache->pos += skipBufferSize;
 
-    data_cache_t *backCache = &stream->dataCaches[!stream->activeCacheIndex];
-    if (stream->remainingSize) {
-      readQueuedCopy(CDFS_DATA_SELECTOR, backCache->data, backCache->size,
-        true);
+    if (!missingBytes)
+      break;
 
-      stream->remainingSize -= backCache->size;
+    // Fetch new data
+    if (stream->dataCache.relPos >= stream->dataCache.size) {
+      int status = cd_block_cmd_data_transfer_end();
+      DEBUG_REQUIRE_EQ(status, 0);
+
+      stream->dataCache.relPos = 0;
+
+      const uint32_t sectorsReady = getSectorsReady();
+      stream->dataCache.size = sectorsReady * CDFS_SECTOR_SIZE;
       
-      // Swap buffers.
-      stream->activeCacheIndex ^= 1;
-      frontCache = &stream->dataCaches[stream->activeCacheIndex];
-      stream->dataPtr = frontCache->data;
+      status = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
+      DEBUG_REQUIRE_EQ(status, 0);
 
-      // Read next stream if possible.
-      data_cache_fetch_next_sample_data(stream);
+      // If waiting expire, keep trying
+      while (!(MEMORY_READ(16, CD_BLOCK(HIRQ)) & (DRDY | EHST)))
+        cpu_instr_nop();
     }
 
-    if (!len)
-      return;
+    // Fetch to tmp since we can only do 4 byte read
+    if (missingBytes < 4) {
+      stream->dataCache.tmp.raw = MEMORY_READ(32, CD_BLOCK_DATA);
+      stream->dataCache.tmpPendingBytes = 4;
+    } else {
+      const uint32_t tmp = MEMORY_READ(32, CD_BLOCK_DATA);
+      if (dst != NULL) {
+        memcpy(dst, &tmp, 4);
+        dst += 4;
+      }
+
+      missingBytes -= 4;
+      
+      stream->dataCache.pos += 4;
+      stream->dataCache.relPos += 4;
+    }
   }
 
-  DEBUG_REQUIRE_LE(frontCache->pos + len, stream->size);
-  DEBUG_REQUIRE_LE(frontCache->relPos + len, frontCache->size);
-  memcpy(dst, &frontCache->data[frontCache->relPos], len);
-
-  frontCache->relPos += len;
-  frontCache->pos += len;
+  DEBUG_REQUIRE_LE(stream->dataCache.pos, stream->size);
+  if (stream->dataCache.pos == stream->size)
+    stream->eof = true;
 }
 
 inline uint8_t stream_read8(binary_stream_t *stream) {
@@ -557,7 +386,8 @@ inline void writeYUV(uint8_t cy, int16_t cr, int16_t cg, int16_t cb,
   const uint8_t ng = CLAMP(g, 0, 255);
   const uint8_t nb = CLAMP(b, 0, 255);
 
-  vdp2ImagePtr[index] = COLOR_RGB1888_RGB1555(1, nr, ng, nb).raw;
+  const color_rgb1555_t color = { { 1, nb >> 3, ng >> 3, nr >> 3 } };
+  vdp2ImagePtr[index] = color.raw;
 }
 
 // Write the same value twice horizontally
@@ -578,8 +408,8 @@ inline void writeYUV2(uint8_t cy, int16_t cr, int16_t cg, int16_t cb,
   const uint8_t ng = CLAMP(g, 0, 255);
   const uint8_t nb = CLAMP(b, 0, 255);
 
-  const uint16_t color = COLOR_RGB1888_RGB1555(1, nr, ng, nb).raw;
-  vdp2ImagePtr[index] = vdp2ImagePtr[index + 1] = color;
+  const color_rgb1555_t color = { { 1, nb >> 3, ng >> 3, nr >> 3 } };
+  vdp2ImagePtr[index] = vdp2ImagePtr[index + 1] = color.raw;
 }
 
 inline void stripdata_skipBlock(stripdata_t *data) {
@@ -877,7 +707,7 @@ void readV1VectorsInChunk(binary_stream_t *stream, stripdata_t *data,
     const uint32_t readNow = MIN(readBytes, TMP_BUFFER_SIZE);
 
     stream_readbytes(stream, tmpBuffer, readNow);
-    for (uint32_t i = 0; i < readNow; ++i) {
+    for (volatile uint32_t i = 0; i < readNow; ++i) {
       const uint8_t c0 = tmpBuffer[i];
       renderPixel1(data, c0);
       stripdata_skipBlock(&stripData);
@@ -893,8 +723,10 @@ void readV1VectorsInChunk(binary_stream_t *stream, stripdata_t *data,
  void readChunk(uint16_t chunkID, uint16_t chunkDataLength,
   binary_stream_t *stream, stripdata_t *data) {
 
-  if (chunkDataLength == 0)
+  if (chunkDataLength == 0) {
+    waitCopyingBlocks();
     return;
+  }
 
   // If we are still copying the blocks.
   const uint32_t chunkIdPos = stream_pos(stream) - 4;
@@ -985,7 +817,12 @@ void readV1VectorsInChunk(binary_stream_t *stream, stripdata_t *data,
     dbgio_printf("Unknown chunk id 0x%X at offset %d, relpos %d\n", chunkID,
       chunkIdPos, stream_relPos(stream) - 4);
 
-    sprintf((char *)LWRAM(256),
+    const uint32_t lastSample = stream->sampleCache.samples[
+      stream->sampleCache.currentSample] & ~FILM_SAMPLE_CHECK_BIT;
+    dbgio_printf("Last sample was %d = %d (0x%X)\n",
+      stream->sampleCache.currentSample, lastSample, lastSample);
+
+    sprintf((char *)LWRAM(80),
       "Unknown chunk id 0x%X at offset %d, relpos %d\n", chunkID,
       chunkIdPos, stream_relPos(stream) - 4);
 
@@ -1054,7 +891,7 @@ void parseVideo(binary_stream_t *stream) {
       LOGGER("%u - Chunk ID 0x%X, length = %d (up to %u) to %d,%d\n",
         stream_pos(stream) - 4, cvidChunkID, cvidChunkDataLength, expectedEnd,
         stripData.writeX, stripData.writeY);
-      
+
       readChunk(cvidChunkID, cvidChunkDataLength, stream, &stripData);
       LOGGER("%u - End chunk\n", stream_pos(stream));
       DEBUG_REQUIRE_EQ(stream_pos(stream), expectedEnd);
@@ -1075,8 +912,7 @@ void parseSample(const film_sample_t sample, binary_stream_t *stream) {
 }
 
 void initialize_film() {
-  cpu_dmac_memset(0, vdp2ImagePtr, 0,
-    VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
+  memset(vdp2ImagePtr, 0, VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
   
   const int status = cd_block_cmd_sector_length_set(SECTOR_LENGTH_2048);
   DEBUG_REQUIRE_EQ(status, 0);
@@ -1085,7 +921,9 @@ void initialize_film() {
 void play_film(cdfs_filelist_entry_t *entry, void *dataCache0, void *dataCache1,
   void *sampleCache, uint32_t sampleCacheSize) {
 
+  queueDiskRead(entry->starting_fad, entry->size);
   clearConsole();
+
   stripdata_new(&stripData);
 
   DEBUG_REQUIRE(entry != NULL);
@@ -1152,17 +990,14 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0, void *dataCache1,
   // Must be called just before the sample list
   film_sample_cache_new(&stream, numSamples);
   
-  // Queue up first data reading before we can start to process the frames.
-  data_cache_fetch_first_sample_data(&stream, sampleDataPos);
-
-  // Trigger next data copy.
-  data_cache_fetch_next_sample_data(&stream);
-
   dbgio_printf("SamplePos: %d\nSampleDataPos: %d\nPos: %d\nRelPos: %d\n",
     sampleDescriptionPos, sampleDataPos, stream_pos(&stream),
     stream_relPos(&stream));
 
   dbgio_flush();
+  vdp2_sync();
+  vdp2_sync_wait();
+
   cpu_frt_ovi_set(frtOviHandler);
   frtTimerStart(0);
 
@@ -1185,15 +1020,19 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0, void *dataCache1,
     parseSample(sample, &stream);
     samplesInSecCount++;
 
-    clearConsole();
-    dbgio_printf("Samples/s: %lu (%lu)\nMin: %lu\n", samplesInSec,
-      samplesInSecCount, minSamplesInSec);
-    dbgio_flush();
+    //clearConsole();
+    // dbgio_printf("Samples/s: %lu (%lu)\nMin: %lu\n", samplesInSec,
+    //   samplesInSecCount, minSamplesInSec);
+    // dbgio_flush();
+    // vdp2_sync();
+    // vdp2_sync_wait();
 
     LOGGER_FLUSH();
   }
+    
+  const int status = cd_block_cmd_data_transfer_end();
+  DEBUG_REQUIRE_EQ(status, 0);
 
-  cpu_dmac_memset(0, vdp2ImagePtr, 0,
-    VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
+  memset(vdp2ImagePtr, 0, VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
 }
 
