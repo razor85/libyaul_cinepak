@@ -4,7 +4,9 @@
 #include "base.h"
 
 // Maximum frame length is 65536 and we might have audio + video
-#define DATA_CACHE_SIZE (CDFS_SECTOR_SIZE * 64)
+#define DATA_CACHE_NUM_SLOTS 64
+#define DATA_CACHE_SIZE (CDFS_SECTOR_SIZE * DATA_CACHE_NUM_SLOTS)
+#define DATA_CACHE_SLOT_SIZE CDFS_SECTOR_SIZE
 
 #define FILM_SAMPLE_START_OFFSET 64
 
@@ -21,7 +23,10 @@
 // a video (0) or audio sample (1). If it is a video sample, the rest of the
 // data holds the 'info2' field from the STAB data and if its audio, it holds
 // the sample length.
-typedef uint32_t film_sample_t;
+typedef struct {
+  uint32_t interval; // 0xFFFFFFFF if audio
+  uint32_t length;
+} film_sample_t;
 
 // A sample stored in the STAB table is:
 typedef struct {
@@ -40,20 +45,39 @@ typedef struct {
 typedef union {
   uint8_t b[4];
   uint32_t raw;
-} __packed __aligned(4) tmp_cd_data;
+} __packed __aligned(4) tmp_cd_data_t;
+
+typedef struct {
+  uint8_t *data;
+  uint32_t pos;
+  uint32_t relPos;
+  uint32_t size;
+} __packed __aligned(4) sample_data_t;
 
 typedef struct {
   uint32_t pos;
-  uint32_t relPos;
-  tmp_cd_data tmp;
-  uint32_t tmpPendingBytes;
-  uint32_t size;
+  uint32_t relPos; // actually used when reading data, pos and endPos are fixed
+  uint32_t endPos;
+  uint32_t isQueued;
+} __packed __aligned(4) data_cache_slot_t;
+
+// Circular buffer: Read starts at 0 and write at 1. As long as write doesn't
+// reach read there is still data to be fetched from the disk.
+typedef struct {
+  data_cache_slot_t *readSlot;
+  data_cache_slot_t *writeSlot;
+  uint32_t position; // absolute position in data
+  uint32_t cdBufferIndex;
+  uint32_t missingBytes;
+  data_cache_slot_t slots[DATA_CACHE_NUM_SLOTS];
+  data_cache_slot_t *lastSlotPtr;
 } __packed __aligned(4) data_cache_t;
 
 typedef struct {
   uint32_t startFAD;
   uint32_t size;
   
+  uint8_t *dataCachePtr;
   data_cache_t dataCache;
 
   film_sample_cache_t sampleCache;
@@ -91,7 +115,9 @@ typedef struct {
 
 extern void initialize_film();
 
+extern void film_vblank();
+
 extern void play_film(cdfs_filelist_entry_t *fsEntry, void *dataCache0,
-  void *dataCache1, void* sampleCache, uint32_t sampleCacheSize);
+  void *sampleCache, uint32_t sampleCacheSize);
 
 #endif // DECODER_H

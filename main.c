@@ -9,10 +9,11 @@ static smpc_peripheral_digital_t pad0;
 
 static cdfs_filelist_t filelist;
 
-static uint8_t dataCaches[DATA_CACHE_SIZE * 2];
+static uint8_t dataCache[DATA_CACHE_SIZE] __aligned(16);
 
 #define SAMPLE_CACHE_SIZE sizeof(film_sample_t) * 10000
-static uint8_t sampleCache[SAMPLE_CACHE_SIZE];
+
+static uint8_t sampleCache[SAMPLE_CACHE_SIZE] __aligned(16);
 
 void clearConsole() { dbgio_printf("[H[2J"); }
 
@@ -70,8 +71,8 @@ int main() {
       clearConsole();
       dbgio_flush();
 
-      play_film(movieEntries[menuSelection], dataCaches,
-        &dataCaches[DATA_CACHE_SIZE], sampleCache, SAMPLE_CACHE_SIZE);
+      play_film(movieEntries[menuSelection], dataCache, sampleCache,
+        SAMPLE_CACHE_SIZE);
 
       movieSelected = false;
       dbgio_dev_font_load();
@@ -165,6 +166,7 @@ void user_init(void) {
 }
 
 static void _vblank_in_handler(void *work __unused) {
+  film_vblank();
 }
 
 static void _vblank_out_handler(void *work __unused) {
