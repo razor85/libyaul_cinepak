@@ -5,7 +5,8 @@
 
 // Maximum frame length is 65536 and we might have audio + video
 #define DATA_CACHE_NUM_SLOTS 64
-#define DATA_CACHE_SIZE (CDFS_SECTOR_SIZE * DATA_CACHE_NUM_SLOTS)
+// #define DATA_CACHE_SIZE (CDFS_SECTOR_SIZE * DATA_CACHE_NUM_SLOTS)
+#define DATA_CACHE_SIZE (320 * 240 * 2)
 #define DATA_CACHE_SLOT_SIZE CDFS_SECTOR_SIZE
 
 #define FILM_SAMPLE_START_OFFSET 64
@@ -55,31 +56,13 @@ typedef struct {
 } __packed __aligned(4) sample_data_t;
 
 typedef struct {
-  uint32_t pos;
-  uint32_t relPos; // actually used when reading data, pos and endPos are fixed
-  uint32_t endPos;
-  uint32_t isQueued;
-} __packed __aligned(4) data_cache_slot_t;
-
-// Circular buffer: Read starts at 0 and write at 1. As long as write doesn't
-// reach read there is still data to be fetched from the disk.
-typedef struct {
-  data_cache_slot_t *readSlot;
-  data_cache_slot_t *writeSlot;
-  uint32_t position; // absolute position in data
-  uint32_t cdBufferIndex;
-  uint32_t missingBytes;
-  data_cache_slot_t slots[DATA_CACHE_NUM_SLOTS];
-  data_cache_slot_t *lastSlotPtr;
-} __packed __aligned(4) data_cache_t;
-
-typedef struct {
   uint32_t startFAD;
   uint32_t size;
-  
-  uint8_t *dataCachePtr;
-  data_cache_t dataCache;
+  uint32_t remainingSectors;
 
+  uint32_t dataAvailable;
+  uint32_t offset;
+  
   film_sample_cache_t sampleCache;
   
   bool eof;

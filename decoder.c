@@ -2,11 +2,11 @@
 #include "md5.h"
 
 #ifndef MIN
-#define MIN(X, Y) ((X) < (Y)) ? (X) : (Y)
+#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 #endif
 
 #ifndef MAX
-#define MAX(X, Y) ((X) > (Y)) ? (X) : (Y)
+#define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
 #endif
 
 #ifndef CLAMP
@@ -28,6 +28,7 @@ stripdata_t stripData;
 uint32_t videoWidth = VIDEO_WIDTH;
 uint32_t videoHeight = VIDEO_HEIGHT;
 uint32_t videoStartY = 0;
+uint16_t *vdp2ImagePtr = (uint16_t *)VDP2_VRAM_ADDR(0, 16 * VDP2_WIDTH);
 
 typedef struct {
   void *addr;
@@ -39,54 +40,34 @@ uint16_t frtOverflowCount = 0;
 const uint32_t frtTimerDiv = CPU_FRT_NTSC_320_128_COUNT_1MS;
   
 // For saving reads
-#define TMP_BUFFER_SIZE 128
-uint8_t tmpBuffer[TMP_BUFFER_SIZE];
+#define TMP_BUFFER_SIZE 65536
+__aligned(4) uint8_t tmpBuffer[TMP_BUFFER_SIZE];
+
+// Keep track when we asked for updates
+// TODO: Debugging only
+uint32_t currentSampleId = 0;
+uint32_t lastUpdateSampleId = 0;
 
 #define HIRQ 0x0008UL
 #define DRDY 0x0002 /* Data transfer preparations complete */
 #define EHST 0x0080 /* Host I/O processing complete */
-#define CD_BLOCK_DATA 0x25818000UL
 
-uint8_t stream_read8(binary_stream_t *);
+// Read 4 bytes from register
+#define CD_BLOCK_DATA_4 0x25818000UL
+
+// Read 2 bytes from register
+#define CD_BLOCK_DATA_2 0x25890000UL
+
 uint16_t stream_read16(binary_stream_t *);
-uint32_t stream_read24(binary_stream_t *);
 uint32_t stream_read32(binary_stream_t *);
+uint32_t stream_pos(binary_stream_t *stream);
 void stream_readbytes(binary_stream_t *, void *, uint32_t);
 void stream_skip(binary_stream_t *, uint32_t);
-uint32_t stream_pos(binary_stream_t *stream);
-uint32_t stream_relPos(binary_stream_t *stream);
 
 volatile bool dmaTransfering = false;
-scu_dma_handle_t dmaHandle;
-
 void waitDmac() {
   while (dmaTransfering)
     cpu_instr_nop();
-}
-
-void dmacDone(void *work __unused) {
-  cpu_cache_purge();
-
-  const int status = cd_block_cmd_data_transfer_end();
-  DEBUG_REQUIRE_EQ(status, 0);
-  
-  dmaTransfering = false;
-}
-
-binary_stream_t *scuDmaStreamPtr = NULL;
-void scuDmaDone(void *slotParam) {
-  scu_dma_level_end_set(0, NULL, NULL);
-  cpu_cache_purge();
-
-  const int status = cd_block_cmd_data_transfer_end();
-  DEBUG_REQUIRE_EQ(status, 0);
-  
-  data_cache_slot_t *slotPtr = (data_cache_slot_t *)slotParam;
-
-  dmaTransfering = false;
-  slotPtr->isQueued = false;
-    
-  scheduleNextTransfer(scuDmaStreamPtr, false);
 }
 
 void frtOviHandler() { frtOverflowCount++; }
@@ -109,10 +90,6 @@ void md5PrintResult(MD5_CTX *md5) {
   dbgio_printf("MD5\n");
   for (uint32_t i = 0; i < MD5_DIGEST_LENGTH; i++)
     dbgio_printf("%02x", md5Result[i]);
-}
-
-inline uint32_t slotIndex(binary_stream_t *stream, data_cache_slot_t *slot) {
-  return ((uint32_t)(slot - stream->dataCache.slots));
 }
 
 inline void clearConsole() { dbgio_printf("[H[2J"); }
@@ -140,7 +117,7 @@ void queueDiskRead(uint32_t fad, uint32_t size) {
   DEBUG_REQUIRE_EQ(size % 4, 0);
   waitForCD();
 
-  int status = cd_block_cmd_selector_reset(0, 0);
+  int status __unused = cd_block_cmd_selector_reset(0, 0);
   DEBUG_REQUIRE_EQ(status, 0);
 
   status = cd_block_cmd_cd_dev_connection_set(0);
@@ -150,11 +127,11 @@ void queueDiskRead(uint32_t fad, uint32_t size) {
   DEBUG_REQUIRE_EQ(status, 0);
 }
 
-static inline uint32_t getSectorsReady() {
+static inline uint32_t getSectorsReady(uint32_t wantSectors) {
   uint32_t sectorsReady;
   do {
     sectorsReady = cd_block_cmd_sector_number_get(0);
-  } while (sectorsReady == 0);
+  } while (sectorsReady < wantSectors);
 
   return sectorsReady;
 }
@@ -175,7 +152,8 @@ void stripdata_new(stripdata_t *data) {
 
 volatile bool copyingBlocks = false;
 void dmaCopyBlocksDone(void *data __unused) {
-  dmacDone(data);
+  cpu_cache_purge();
+  dmaTransfering = false;
   copyingBlocks = false;
 }
 
@@ -188,10 +166,7 @@ void stripdata_copyLastCodebooks(stripdata_t *data) {
   DEBUG_REQUIRE_GT(data->strip, 0);
   DEBUG_REQUIRE_LT(data->strip, MAX_STRIPS);
   
-  waitDmac();
-  
-  while (copyingBlocks)
-    cpu_instr_nop();
+  waitCopyingBlocks();
 
   cpu_dmac_cfg_t cfg = {
     .channel = 0,
@@ -224,7 +199,7 @@ inline codebook_t* stripdata_getV4Codebook(stripdata_t *data) {
 // stream must be exactly at the start of the sample descriptions
 void film_sample_cache_new(binary_stream_t *stream, uint32_t totalNumSamples) {
   // We only read a single sector, so check how many samples we have there.
-  const uint32_t samplesInitialPos = stream_pos(stream);
+  const uint32_t samplesInitialPos __unused = stream_pos(stream);
   DEBUG_REQUIRE_EQ(FILM_SAMPLE_START_OFFSET, samplesInitialPos);
 
   if (totalNumSamples > stream->sampleCache.numSamples) {
@@ -237,7 +212,6 @@ void film_sample_cache_new(binary_stream_t *stream, uint32_t totalNumSamples) {
 
     dbgio_flush();
     vdp2_sync();
-    vdp2_sync_wait();
 
     VDP_INFLOOP();
   }
@@ -271,266 +245,126 @@ inline film_sample_t film_sample_get_next_sample(film_sample_cache_t *cache) {
   return cache->samples[cache->currentSample++];
 }
 
-uint32_t stream_pos(binary_stream_t *stream) {
-  return stream->dataCache.position;
-}
-
-uint32_t stream_relPos(binary_stream_t *stream) {
-  return stream->dataCache.readSlot->relPos - stream->dataCache.readSlot->pos;
-}
-
 void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
   void *dataCache0, void *sampleCache, uint32_t sampleCacheSize) {
 
-  scuDmaStreamPtr = stream;
-
-  scu_dma_level_cfg_t dmaCfg = {
-    .space = SCU_DMA_SPACE_BUS_A,
-    .mode = SCU_DMA_MODE_DIRECT,
-    .stride = SCU_DMA_STRIDE_4_BYTES,
-    .update = SCU_DMA_UPDATE_WUP,
-  };
-    
-  // Prevent assertion
-  dmaCfg.xfer.direct.len = 0xFFFFFFFF;
-  dmaCfg.xfer.direct.dst = 0xFFFFFFFF;
-  dmaCfg.xfer.direct.src = 0xFFFFFFFF;
-
-  scu_dma_config_buffer(&dmaHandle, &dmaCfg);
-
   stream->startFAD = entry->starting_fad;
   stream->size = entry->size;
+  stream->remainingSectors = numSectorsForSize(entry->size);
+  stream->dataAvailable = 0;
+  stream->offset = 0;
 
   stream->sampleCache.samples = (film_sample_t *)sampleCache;
   stream->sampleCache.numSamples = sampleCacheSize / sizeof(film_sample_t);
   stream->sampleCache.currentSample = 0;
   stream->eof = false;
 
-  stream->dataCachePtr = (uint8_t *)dataCache0;
-  stream->dataCache.readSlot = &stream->dataCache.slots[0];
-  stream->dataCache.missingBytes = stream->size;
-
-  for (uint32_t i = 0; i < DATA_CACHE_NUM_SLOTS; ++i) {
-    data_cache_slot_t *slot = &stream->dataCache.slots[i];
-    slot->pos = i * DATA_CACHE_SLOT_SIZE;
-    slot->relPos = slot->pos;
-    slot->endPos = slot->pos + DATA_CACHE_SLOT_SIZE;
-    slot->isQueued = true;
-  }
-
-  stream->dataCache.lastSlotPtr = &stream->dataCache.slots[
-    DATA_CACHE_NUM_SLOTS - 1];
-
-  uint32_t sectorsReady = getSectorsReady();
-  if (sectorsReady >= DATA_CACHE_NUM_SLOTS)
-    sectorsReady = DATA_CACHE_NUM_SLOTS - 1;
-
+  // Fetch first sectors
+  const uint32_t sectorsReady = getSectorsReady(MIN(stream->remainingSectors, 200));
   DEBUG_REQUIRE_GT(sectorsReady, 0);
-  DEBUG_REQUIRE_LT(sectorsReady, DATA_CACHE_NUM_SLOTS);
 
-  const uint32_t readBytes = sectorsReady * CDFS_SECTOR_SIZE;
-  stream->dataCache.writeSlot = &stream->dataCache.slots[sectorsReady];
-  stream->dataCache.position = 0;
-  stream->dataCache.cdBufferIndex = readBytes;
-  stream->dataCache.missingBytes = stream->size - readBytes;
-  for (uint32_t i = 0; i < sectorsReady; ++i)
-    stream->dataCache.slots[i].isQueued = false;
-
-  dbgio_printf("Starting with %d sectors\n", sectorsReady);
-      
-  int status = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
+  int status __unused = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
   DEBUG_REQUIRE_EQ(status, 0);
 
   // Wait until data is available
   while (!(MEMORY_READ(16, CD_BLOCK(HIRQ)) & (DRDY | EHST)))
     cpu_instr_nop();
 
-  // DMA data and wait
-  cpu_dmac_channel_wait(0);
-
-  cpu_dmac_cfg_t cfg = {
-    .channel = 0,
-    .src_mode = CPU_DMAC_SOURCE_FIXED,
-    .dst_mode = CPU_DMAC_DESTINATION_INCREMENT,
-    .stride = CPU_DMAC_STRIDE_4_BYTES,
-    .bus_mode = CPU_DMAC_BUS_MODE_BURST,
-    .src = CPU_CACHE_THROUGH | CD_BLOCK_DATA,
-    .dst = CPU_CACHE_THROUGH | (uint32_t)dataCache0,
-    .len = readBytes,
-    .ihr = dmacDone,
-    .ihr_work = NULL,
-  };
-
-  dmaTransfering = true;
-
-  cpu_dmac_channel_config_set(&cfg);
-  cpu_dmac_channel_start(0);
-
-  waitDmac();
+  stream->dataAvailable = sectorsReady * CDFS_SECTOR_SIZE;
+  stream->remainingSectors -= sectorsReady;
 }
-  
-void scheduleNextTransfer(binary_stream_t *stream, bool discardData) {
-  // All file is read
-  if (!stream->dataCache.missingBytes || dmaTransfering)
-    return;
 
-  // Disk is not ready.
-  uint32_t sectorsReady = getSectorsReady();
+void triggerDataRequest(binary_stream_t *stream) {
+  DEBUG_REQUIRE_NE(stream->remainingSectors, 0);
+      
+  // End previous transfers
+  int status __unused = cd_block_cmd_data_transfer_end();
+  DEBUG_REQUIRE_EQ(status, 0);
 
-  // There is no space left on the circular queue.
-  data_cache_slot_t *writeSlot = stream->dataCache.writeSlot;
-  data_cache_slot_t *nextSlot = writeSlot + 1;
-  if (nextSlot > stream->dataCache.lastSlotPtr)
-    nextSlot = &stream->dataCache.slots[0];
-
-  if (nextSlot == stream->dataCache.readSlot)
-    return;
-  
-  DEBUG_REQUIRE_EQ(writeSlot->isQueued, true);
-
-  // TODO: Read more than 1.
-  if (sectorsReady > 1)
-    sectorsReady = 1;
-
+  const uint32_t sectorsReady = getSectorsReady(MIN(stream->remainingSectors, 16));
   DEBUG_REQUIRE_GT(sectorsReady, 0);
-      
-  uint32_t destinationAddress = (uint32_t) &stream->dataCachePtr[writeSlot->pos];
-  DEBUG_REQUIRE_EQ(destinationAddress % 4, 0);
-  writeSlot->relPos = writeSlot->pos;
-  writeSlot->isQueued = true;
 
-  const uint32_t readBytes = sectorsReady * CDFS_SECTOR_SIZE;
-  stream->dataCache.cdBufferIndex += readBytes;
-  if (readBytes < stream->dataCache.missingBytes)
-    stream->dataCache.missingBytes -= readBytes;
-  else
-    stream->dataCache.missingBytes = 0;
-    
-  scu_dma_level_wait(0);
-      
-  int status = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
+  status = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
   DEBUG_REQUIRE_EQ(status, 0);
 
   // Wait until data is available
   while (!(MEMORY_READ(16, CD_BLOCK(HIRQ)) & (DRDY | EHST)))
     cpu_instr_nop();
 
-  stream->dataCache.writeSlot = nextSlot;
-
-  if (discardData) {
-    const int status = cd_block_cmd_data_transfer_end();
-    DEBUG_REQUIRE_EQ(status, 0);
-  } else {
-    // SCU DMA it
-    DEBUG_REQUIRE_EQ(readBytes, CDFS_SECTOR_SIZE);
-    dmaHandle.dnr = CPU_CACHE_THROUGH | CD_BLOCK_DATA;
-    dmaHandle.dnw = CPU_CACHE_THROUGH | destinationAddress;
-    dmaHandle.dnc = readBytes;
-    dmaTransfering = true;
-  
-    scu_dma_config_set(0, SCU_DMA_START_FACTOR_ENABLE, &dmaHandle, NULL);
-    scu_dma_level_end_set(0, scuDmaDone, (void *)writeSlot);
-      
-    cpu_cache_purge();
-    scu_dma_level_fast_start(0);
-  }
+  stream->dataAvailable = sectorsReady * CDFS_SECTOR_SIZE;
+  stream->remainingSectors -= sectorsReady;
+  lastUpdateSampleId = currentSampleId;
 }
-
+  
 void stream_readbytes(binary_stream_t *stream, void *tmpDst, uint32_t len) {
-  DEBUG_REQUIRE_EQ(stream->eof, false);
-  uint8_t *dst = (uint8_t *)tmpDst;
+  DEBUG_REQUIRE_EQ(len % 2, 0);
+  DEBUG_REQUIRE_NE(tmpDst, NULL);
+  DEBUG_REQUIRE_LE(stream->offset + len, stream->size);
+
+  volatile uint16_t *destPtr = (volatile uint16_t *)tmpDst;
+  static volatile uint16_t *cdData = (volatile uint16_t *)CD_BLOCK_DATA_2;
+
+  uint32_t remainingBytes = len;
+  while (remainingBytes) {
+    if (!stream->dataAvailable)
+      triggerDataRequest(stream);
+
+    const uint32_t readSize = MIN(stream->dataAvailable, remainingBytes);
+    const uint32_t readSizeLoop = readSize >> 1;
     
-  data_cache_slot_t *readSlot = stream->dataCache.readSlot;
-  DEBUG_REQUIRE_LT(readSlot->relPos, stream->size);
-
-  uint32_t missingBytes = len;
-  while (missingBytes) {
-
-    // If we have data left over from previous 4 byte read, use it.
-    if (readSlot->relPos + missingBytes >= readSlot->endPos) {
-      uint32_t readBytes = readSlot->endPos - readSlot->relPos;
-      if (dst != NULL) {
-        memcpy(dst, &stream->dataCachePtr[readSlot->relPos], readBytes);
-        dst += readBytes;
-      }
-
-      stream->dataCache.position += readBytes;
-      readSlot->relPos += readBytes;
-      missingBytes -= readBytes;
-    } else {
-      if (dst != NULL) {
-        memcpy(dst, &stream->dataCachePtr[readSlot->relPos], missingBytes);
-        dst += missingBytes;
-      }
-
-      stream->dataCache.position += missingBytes;
-      readSlot->relPos += missingBytes;
-      missingBytes = 0;
+    for (volatile uint32_t i = 0; i < readSizeLoop; ++i) {
+      *destPtr++ = *cdData;
     }
 
-    if (!missingBytes)
-      break;
-
-    // Fetch new data
-    DEBUG_REQUIRE_LE(readSlot->relPos, readSlot->endPos);
-    if (readSlot->relPos == readSlot->endPos) {
-      scheduleNextTransfer(stream, false);
-
-      // Reached the end and there is nothing else to read.
-      DEBUG_REQUIRE_NE(stream->dataCache.readSlot, stream->dataCache.writeSlot);
-
-      data_cache_slot_t *nextSlot = readSlot + 1;
-      if (nextSlot > stream->dataCache.lastSlotPtr)
-        nextSlot = &stream->dataCache.slots[0];
-
-      // dbgio_printf("fetching next at %d, slot %d\n", readSlot->relPos,
-      //   slotIndex(stream, nextSlot));
-
-      while (nextSlot->isQueued)
-        cpu_instr_nop();
-
-      // Invalidate current read slot
-      stream->dataCache.readSlot->isQueued = true;
-      stream->dataCache.readSlot = readSlot = nextSlot;
-    }
+    stream->dataAvailable -= readSize;
+    remainingBytes -= readSize;
   }
 
-  DEBUG_REQUIRE_LE(readSlot->relPos, stream->size);
-  if (readSlot->relPos == stream->size)
-    stream->eof = true;
+  stream->offset += len;
 }
 
-inline uint8_t stream_read8(binary_stream_t *stream) {
-  uint8_t data;
-  stream_readbytes(stream, &data, 1);
+void stream_skip(binary_stream_t *stream, uint32_t len) {
+  DEBUG_REQUIRE_EQ(len % 2, 0);
+  DEBUG_REQUIRE_LE(stream->offset + len, stream->size);
 
-  return data;
+  static volatile uint16_t *cdData = (volatile uint16_t *)CD_BLOCK_DATA_2;
+
+  uint32_t remainingBytes = len;
+  while (remainingBytes) {
+    if (!stream->dataAvailable)
+      triggerDataRequest(stream);
+    
+    const uint32_t readSize = MIN(stream->dataAvailable, remainingBytes);
+    const uint32_t readSizeLoop = readSize >> 1;
+
+    volatile uint16_t nothing __unused;
+    for (volatile uint32_t i = 0; i < readSizeLoop; ++i) {
+      nothing = *cdData;
+    }
+
+    stream->dataAvailable -= readSize;
+    remainingBytes -= readSize;
+  }
+
+  stream->offset += len;
 }
 
-inline uint16_t stream_read16(binary_stream_t *stream) {
+uint16_t stream_read16(binary_stream_t *stream) {
   uint16_t data;
   stream_readbytes(stream, &data, 2);
 
   return data;
 }
 
-inline uint32_t stream_read24(binary_stream_t *stream) {
-  uint32_t data;
-  stream_readbytes(stream, &data, 3);
-  data >>= 8;
-
-  return data;
-}
-
-inline uint32_t stream_read32(binary_stream_t *stream) {
+uint32_t stream_read32(binary_stream_t *stream) {
   uint32_t data;
   stream_readbytes(stream, &data, 4);
 
   return data;
 }
 
-inline void stream_skip(binary_stream_t *stream, uint32_t len) {
-  stream_readbytes(stream, NULL, len);
+inline uint32_t stream_pos(binary_stream_t *stream) {
+  return stream->offset;
 }
 
 inline bool film_sample_is_video(const film_sample_t* sample) {
@@ -541,7 +375,6 @@ inline bool film_sample_is_audio(const film_sample_t* sample) {
   return sample->interval == 0xFFFFFFFF;
 }
 
-uint16_t *vdp2ImagePtr = (uint16_t *)VDP2_VRAM_ADDR(0, 16 * VDP2_WIDTH);
 inline void writeYUV(uint8_t cy, int16_t cr, int16_t cg, int16_t cb,
   uint32_t index) {
 
@@ -730,14 +563,17 @@ void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
   writeYUV(e3->y[2], cr3, cg3, cb3, imageIndex++);
   writeYUV(e3->y[3], cr3, cg3, cb3, imageIndex);
 }
-    
+
 void readVectors(binary_stream_t *stream, stripdata_t *data,
   uint16_t chunkDataLength) {
 
-  uint32_t remainingSectionBytes = chunkDataLength;
   uint32_t flags = stream_read32(stream);
-  remainingSectionBytes -= 4;
+  uint32_t remainingSectionBytes = chunkDataLength - 4;
 
+  DEBUG_REQUIRE_LT(remainingSectionBytes, TMP_BUFFER_SIZE);
+  stream_readbytes(stream, tmpBuffer, remainingSectionBytes);
+
+  uint8_t *tmpData = tmpBuffer;
   while (remainingSectionBytes) {
     if (data->writeY >= data->bottomY)
       break;
@@ -748,19 +584,18 @@ void readVectors(binary_stream_t *stream, stripdata_t *data,
           break;
 
         // V4
-        uint8_t c[4];
-        stream_readbytes(stream, c, 4);
-
+        renderPixel4(data, tmpData[0], tmpData[1], tmpData[2], tmpData[3]);
         remainingSectionBytes -= 4;
-        renderPixel4(data, c[0], c[1], c[2], c[3]);
+        tmpData += 4;
+
       } else {
         if (remainingSectionBytes < 1)
           break;
 
         // V1
-        const uint8_t c0 = stream_read8(stream);
+        renderPixel1(data, tmpData[0]);
         remainingSectionBytes -= 1;
-        renderPixel1(data, c0);
+        tmpData += 1;
       }
 
       stripdata_skipBlock(&stripData);
@@ -770,25 +605,26 @@ void readVectors(binary_stream_t *stream, stripdata_t *data,
     if (remainingSectionBytes < 4)
       break;
 
-    flags = stream_read32(stream);
+    memcpy(&flags, tmpData, 4);
+    tmpData += 4;
     remainingSectionBytes -= 4;
   }
-
-  if (remainingSectionBytes)
-    stream_skip(stream, remainingSectionBytes);
 }
 
 void readVectorsInter(binary_stream_t *stream, stripdata_t *data,
   uint16_t chunkDataLength) {
 
-  uint32_t remainingSectionBytes = chunkDataLength;
+  DEBUG_REQUIRE_LT(chunkDataLength, TMP_BUFFER_SIZE);
+  stream_readbytes(stream, tmpBuffer, chunkDataLength);
+  
+  uint32_t remainingSectionBytes = chunkDataLength - 4;
 
   // We keep reading flags as long as it is possible. We first read 4
   // bytes and then we start shifting them for the VLC. Once we reach
   // the end we try to read a new flag.
-  uint32_t flags = stream_read32(stream);
-  remainingSectionBytes -= 4;
-
+  uint32_t flags = *((uint32_t*)tmpBuffer);
+  
+  uint8_t *tmpData = tmpBuffer + 4;
   uint32_t shifts = 0;
   while (remainingSectionBytes) {
     DEBUG_REQUIRE_LE(shifts, 31);
@@ -806,8 +642,10 @@ void readVectorsInter(binary_stream_t *stream, stripdata_t *data,
         if (remainingSectionBytes < 4)
           break;
 
-        flags = stream_read32(stream);
+        memcpy(&flags, tmpData, 4);
+        tmpData += 4;
         remainingSectionBytes -= 4;
+
         shifts = 0;
       } else {
         flags <<= 1;
@@ -819,19 +657,17 @@ void readVectorsInter(binary_stream_t *stream, stripdata_t *data,
           break;
 
         // V4
-        uint8_t c[4];
-        stream_readbytes(stream, c, 4);
-
+        renderPixel4(data, tmpData[0], tmpData[1], tmpData[2], tmpData[3]);
+        tmpData += 4;
         remainingSectionBytes -= 4;
-        renderPixel4(data, c[0], c[1], c[2], c[3]);
       } else {
         if (remainingSectionBytes < 1)
           break;
         
         // V1
-        const uint8_t c0 = stream_read8(stream);
+        renderPixel1(data, tmpData[0]);
+        tmpData += 1;
         remainingSectionBytes -= 1;
-        renderPixel1(data, c0);
       }
     }
 
@@ -842,28 +678,26 @@ void readVectorsInter(binary_stream_t *stream, stripdata_t *data,
       if (remainingSectionBytes < 4)
         break;
 
-      flags = stream_read32(stream);
+      memcpy(&flags, tmpData, 4);
+      tmpData += 4;
       remainingSectionBytes -= 4;
+
       shifts = 0;
     } else {
       flags <<= 1;
       shifts++;
     }
   }
-      
-  if (remainingSectionBytes)
-    stream_skip(stream, remainingSectionBytes);
 }
     
 void readV1VectorsInChunk(binary_stream_t *stream, stripdata_t *data,
   uint16_t chunkDataLength) {
 
-  uint32_t remainingSectionBytes = chunkDataLength;
-
   uint32_t readBytes = 0;
   uint16_t originalWriteX = stripData.writeX;
   uint16_t originalWriteY = stripData.writeY;
 
+  uint32_t remainingSectionBytes = chunkDataLength;
   while (remainingSectionBytes) {
     if (data->writeY >= data->bottomY)
       break;
@@ -893,14 +727,12 @@ void readV1VectorsInChunk(binary_stream_t *stream, stripdata_t *data,
     stream_skip(stream, remainingSectionBytes);
 }
 
- void readChunk(uint16_t chunkID, uint16_t chunkDataLength,
+void readChunk(uint16_t chunkID, uint16_t chunkDataLength,
   binary_stream_t *stream, stripdata_t *data) {
 
-  if (chunkDataLength == 0)
-    return;
-
+  DEBUG_REQUIRE_EQ(chunkDataLength % 2, 0);
+  
   // If we are still copying the blocks.
-  const uint32_t chunkIdPos = stream_pos(stream) - 4;
   waitCopyingBlocks();
 
   switch (chunkID) {
@@ -984,52 +816,51 @@ void readV1VectorsInChunk(binary_stream_t *stream, stripdata_t *data,
     break;
 
   default:
-    memset(vdp2ImagePtr, 0, VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
-    dbgio_printf("Unknown chunk id 0x%X at offset %d, relpos %d\n", chunkID,
-      chunkIdPos, stream_relPos(stream) - 4);
+    {
+      const uint32_t chunkIdPos = stream_pos(stream) - 4;
 
-    sprintf((char *)LWRAM(80),
-      "Unknown chunk id 0x%X at offset %d, relpos %d\n", chunkID,
-      chunkIdPos, stream_relPos(stream) - 4);
+      memset(vdp2ImagePtr, 0, VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
+      dbgio_printf("Unknown chunk id 0x%X at offset %d\n", chunkID, chunkIdPos);
+      sprintf((char *)LWRAM(80), "Unknown chunk id 0x%X at offset %d\n",
+        chunkID, chunkIdPos);
 
-    DEBUG_REQUIRE(false);
-    break;
+      DEBUG_REQUIRE(false);
+      break;
+    }
   }
 }
 
+typedef struct {
+  union {
+    uint32_t l;
+    uint8_t b[4];
+  } flagsAndCvidLength;
+
+  uint16_t width;
+  uint16_t height;
+  uint16_t numStrips;
+  uint16_t padding;
+} videoHeader;
+
 void parseVideo(binary_stream_t *stream) {
-  const uint8_t flags = stream_read8(stream);
+  videoHeader cvidHeader;
+  stream_readbytes(stream, &cvidHeader, sizeof(videoHeader));
 
-#ifdef HAS_DEBUG_REQUIRE_FUNCTIONS
-  // The deviant format length is 8 bytes shorter.
-  // Those might be unused if LOGGER is disabled.
-  const uint32_t cvidLength __unused = stream_read24(stream);
-  const uint16_t width __unused = stream_read16(stream);
-  const uint16_t height __unused = stream_read16(stream);
-  const uint16_t numStrips = stream_read16(stream);
-  LOGGER(
-    "Reading video sample %dx%d with length = %d, flags = %d and %d strips\n",
-    width, height, cvidLength, flags, numStrips);
-#else
-  stream_skip(stream, 7);
-  const uint16_t numStrips = stream_read16(stream);
-#endif
-
-  // The deviant format as 2 extra bytes in the header.
-  stream_skip(stream, 2);
+  const bool copyLastCodeBooks = !(cvidHeader.flagsAndCvidLength.b[0] & 0x1);
 
   uint16_t lastBottomY = 0;
-  for (uint16_t stripId = 0; stripId < numStrips; ++stripId) {
+  for (uint16_t stripId = 0; stripId < cvidHeader.numStrips; ++stripId) {
     stripData.strip = stripId;
 
     // flag bit 0 will tell if we need the contents of the previous strip
-    if (stripId > 0 && (!(flags & 0x1)))
+    if (stripId > 0 && copyLastCodeBooks)
       stripdata_copyLastCodebooks(&stripData);
 
     uint16_t tmpStripBuffer[6];
     stream_readbytes(stream, tmpStripBuffer, 6 * sizeof(uint16_t));
-
+    
     const uint16_t stripDataLength = tmpStripBuffer[1];
+
     stripData.topY = stripData.writeY = tmpStripBuffer[2];
     stripData.topX = stripData.writeX = tmpStripBuffer[3];
     stripData.bottomY = tmpStripBuffer[4];
@@ -1043,10 +874,9 @@ void parseVideo(binary_stream_t *stream) {
     LOGGER("%u - %u Strip 0x%X, length = %d (%d,%d,%d,%d)\n",
       stream_pos(stream) - 12, stripId, tmpStripBuffer[0], stripDataLength,
       stripData.topX, stripData.topY, stripData.bottomX, stripData.bottomY);
-    
+
     // Read the strip chunks
-    const uint32_t stripLimit = (uint32_t)(stream_pos(stream) +
-      stripDataLength - 12);
+    const uint32_t stripLimit = stream_pos(stream) + stripDataLength - 12;
 
     lastBottomY = stripData.bottomY;
     LOGGER("  Drawing to %dx%d\n", stripData.writeX, stripData.writeY);
@@ -1055,24 +885,22 @@ void parseVideo(binary_stream_t *stream) {
       const uint16_t cvidChunkID = stream_read16(stream);
       const uint16_t cvidChunkDataLength = stream_read16(stream) - 4;
 
-      const size_t expectedEnd = stream_pos(stream) + cvidChunkDataLength;
+      const size_t expectedEnd __unused = stream_pos(stream) + cvidChunkDataLength;
       LOGGER("%u - Chunk ID 0x%X, length = %d (up to %u) to %d,%d\n",
         stream_pos(stream) - 4, cvidChunkID, cvidChunkDataLength, expectedEnd,
         stripData.writeX, stripData.writeY);
 
-      readChunk(cvidChunkID, cvidChunkDataLength, stream, &stripData);
-      LOGGER("%u - End chunk\n", stream_pos(stream));
-      if (stream_pos(stream) != expectedEnd)
-        dbgio_printf("Expected %d, got %d\n", expectedEnd, stream_pos(stream));
-      DEBUG_REQUIRE_EQ(stream_pos(stream), expectedEnd);
+      if (cvidChunkDataLength)
+        readChunk(cvidChunkID, cvidChunkDataLength, stream, &stripData);
 
+      DEBUG_REQUIRE_EQ(stream_pos(stream), expectedEnd);
     } // Strip data
 
     DEBUG_REQUIRE_EQ(stream_pos(stream), stripLimit);
   }
 }
     
-void parseSample(const film_sample_t *sample, binary_stream_t *stream) {
+inline void parseSample(const film_sample_t *sample, binary_stream_t *stream) {
   if (film_sample_is_audio(sample)) {
     stream_skip(stream, sample->length);
   } else {
@@ -1083,7 +911,7 @@ void parseSample(const film_sample_t *sample, binary_stream_t *stream) {
 void initialize_film() {
   memset(vdp2ImagePtr, 0, VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
   
-  const int status = cd_block_cmd_sector_length_set(SECTOR_LENGTH_2048);
+  const int status __unused = cd_block_cmd_sector_length_set(SECTOR_LENGTH_2048);
   DEBUG_REQUIRE_EQ(status, 0);
 }
 
@@ -1106,7 +934,7 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
   binary_stream_t stream;
   stream_new(&stream, entry, dataCache0, sampleCache, sampleCacheSize);
 
-  const uint32_t asciiFilm = stream_read32(&stream);
+  const uint32_t asciiFilm __unused = stream_read32(&stream);
   DEBUG_REQUIRE_EQ(asciiFilm, ASCII_FILM);
   const uint32_t filmHeaderLength = stream_read32(&stream);
 
@@ -1115,23 +943,28 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
 
   stream_skip(&stream, 4); // Unknown
   
-  const uint32_t asciiFdsc = stream_read32(&stream);
+  const uint32_t asciiFdsc __unused = stream_read32(&stream);
   DEBUG_REQUIRE_EQ(asciiFdsc, ASCII_FDSC);
 
   // FDSC length.
   stream_skip(&stream, 4);
 
-  const uint32_t asciiCvid = stream_read32(&stream);
+  const uint32_t asciiCvid __unused = stream_read32(&stream);
   DEBUG_REQUIRE_EQ(asciiCvid, ASCII_CVID);
 
   videoHeight = stream_read32(&stream);
   videoWidth = stream_read32(&stream);
   videoStartY = (VIDEO_HEIGHT - videoHeight) / 2;
 
-  const uint8_t videoBPP = stream_read8(&stream);
-  const uint8_t audioChannels = stream_read8(&stream);
-  const uint8_t audioSamplingResolution = stream_read8(&stream);
-  const uint8_t audioCompression = stream_read8(&stream);
+  // A = video BPP
+  // B = number of audio channels
+  // C = audio sampling resolution
+  // D = audio compression
+  const uint32_t ABCD = stream_read32(&stream);
+  const uint8_t videoBPP = (ABCD >> 24) & 0xFF;
+  const uint8_t audioChannels = (ABCD >> 16) & 0xFF;
+  const uint8_t audioSamplingResolution = (ABCD >> 8) & 0xFF;
+  const uint8_t audioCompression = ABCD & 0xFF;
   const uint16_t audioSamplingFrequencyHz = stream_read16(&stream);
 
   dbgio_printf("Found %dx%d@%dbpp video\n", videoWidth, videoHeight, videoBPP);
@@ -1143,7 +976,7 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
   // Unknown
   stream_skip(&stream, 6);
 
-  const uint32_t asciiStab = stream_read32(&stream);
+  const uint32_t asciiStab __unused = stream_read32(&stream);
   DEBUG_REQUIRE_EQ(asciiStab, ASCII_STAB);
 
   // STAB length.
@@ -1161,24 +994,28 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
   // Must be called just before the sample list
   film_sample_cache_new(&stream, numSamples);
   
-  dbgio_printf("SamplePos: %d\nSampleDataPos: %d\nPos: %d\nRelPos: %d\n",
-    sampleDescriptionPos, sampleDataPos, stream_pos(&stream),
-    stream_relPos(&stream));
+  dbgio_printf("SamplePos: %d\nSampleDataPos: %d\nPos: %d\n",
+    sampleDescriptionPos, sampleDataPos, stream_pos(&stream));
 
   dbgio_flush();
   vdp2_sync();
-  vdp2_sync_wait();
 
   cpu_frt_ovi_set(frtOviHandler);
   frtTimerStart(0);
-
-  scheduleNextTransfer(&stream, false);
 
   uint32_t samplesInSec = 0;
   uint32_t minSamplesInSec = 0xFFFFFFFF;
   uint32_t samplesInSecCount = 0;
 
-  for (uint32_t sampleId = 0; sampleId < numSamples; ++sampleId) {
+  uint32_t *debugData = (uint32_t*) LWRAM(0);
+  
+  clearConsole();
+  dbgio_flush();
+  vdp2_sync();
+
+  for (uint32_t sampleId = 0; sampleId < 0xFFFFFFFF; ++sampleId) {
+    currentSampleId = sampleId;
+
     uint32_t timeEllapsed = frtTimerEllapsed();
     if (timeEllapsed >= 1000) {
       samplesInSec = samplesInSecCount;
@@ -1192,20 +1029,18 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
     film_sample_t sample = film_sample_get_next_sample(&stream.sampleCache);
     parseSample(&sample, &stream);
     samplesInSecCount++;
-  
-    scheduleNextTransfer(&stream, false);
 
-    /*
-    clearConsole();
-    dbgio_printf("Samples/s: %lu (%lu)\nMin: %lu\n", samplesInSec,
-      samplesInSecCount, minSamplesInSec);
-    */
-    dbgio_flush();
-    vdp2_sync();
-    vdp2_sync_wait();
+    // Samples, samplesInSecCount, minSamplesInSec, isUpdating.
+    debugData[0] = samplesInSec;
+    debugData[1] = samplesInSecCount;
+    debugData[2] = minSamplesInSec;
+    debugData[3] = currentSampleId == lastUpdateSampleId;
+
+    if (film_sample_is_video(&sample))
+      vdp2_sync();
   }
     
-  const int status = cd_block_cmd_data_transfer_end();
+  const int status __unused = cd_block_cmd_data_transfer_end();
   DEBUG_REQUIRE_EQ(status, 0);
 
   memset(vdp2ImagePtr, 0, VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
