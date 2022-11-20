@@ -2,7 +2,7 @@ ifeq ($(strip $(YAUL_INSTALL_ROOT)),)
   $(error Undefined YAUL_INSTALL_ROOT (install root directory))
 endif
 
-include $(YAUL_INSTALL_ROOT)/share/pre.common.mk
+include $(YAUL_INSTALL_ROOT)/share/build.pre.mk
 
 SH_PROGRAM:= cinepak_player
 SH_SRCS :=   \
@@ -19,13 +19,13 @@ IP_AREAS:= JTUBKAEL
 IP_PERIPHERALS:= JAMKST
 IP_TITLE:= cinepak_player
 IP_MASTER_STACK_ADDR:= 0x06004000
-IP_SLAVE_STACK_ADDR:= 0x06002000
+IP_SLAVE_STACK_ADDR:= 0x06001E00
 IP_1ST_READ_ADDR:= 0x06004000
+IP_1ST_READ_SIZE:= 0
 
-M68K_PROGRAM:= 
-M68K_OBJECTS:=
+
+include $(YAUL_INSTALL_ROOT)/share/build.post.iso-cue.mk
 
 post-build-iso:
 	printf "20: 542D313830303347" | xxd -r - cinepak_player.iso
 
-include $(YAUL_INSTALL_ROOT)/share/post.common.mk
