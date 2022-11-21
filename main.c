@@ -87,7 +87,7 @@ int main() {
 void user_init(void) {
   const vdp2_scrn_bitmap_format_t format = {
     .scroll_screen = VDP2_SCRN_NBG0,
-    .ccc= VDP2_SCRN_CCC_RGB_32768,
+    .ccc = VDP2_SCRN_CCC_RGB_32768,
     .bitmap_size = VDP2_SCRN_BITMAP_SIZE_512X256,
     .palette_base = 0x00000000,
     .bitmap_base = VDP2_VRAM_ADDR(0, 0x00000)

@@ -392,7 +392,7 @@ inline void writeYUV(uint8_t cy, int16_t cr, int16_t cg, int16_t cb,
   const uint8_t ng = CLAMP(g, 0, 255);
   const uint8_t nb = CLAMP(b, 0, 255);
 
-  const rgb1555_t color = RGB1555_INITIALIZER(1, nb >> 3, ng >> 3, nr >> 3);
+  const rgb1555_t color = RGB1555_INITIALIZER(1, nr >> 3, ng >> 3, nb >> 3);
   vdp2ImagePtr[index] = color.raw;
 }
 
@@ -414,7 +414,7 @@ inline void writeYUV2(uint8_t cy, int16_t cr, int16_t cg, int16_t cb,
   const uint8_t ng = CLAMP(g, 0, 255);
   const uint8_t nb = CLAMP(b, 0, 255);
 
-  const rgb1555_t color = RGB1555_INITIALIZER(1, nb >> 3, ng >> 3, nr >> 3);
+  const rgb1555_t color = RGB1555_INITIALIZER(1, nr >> 3, ng >> 3, nb >> 3);
   vdp2ImagePtr[index] = vdp2ImagePtr[index + 1] = color.raw;
 }
 
