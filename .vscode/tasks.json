@@ -1,0 +1,84 @@
+{
+  // Build project
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "MSYS64 Saturn Make Folder",
+      "type": "shell",
+      "command": "e:/Desenvolvimento/SegaSaturn/MSYS64/usr/bin/sh.exe",
+      "args": [
+        "--login",
+        "-ic",
+        "cd ~/${workspaceFolderBasename} && make -j8"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "MSYS64 Saturn Rebuild Folder",
+      "type": "shell",
+      "command": "e:/Desenvolvimento/SegaSaturn/MSYS64/usr/bin/sh.exe",
+      "args": [
+        "--login",
+        "-ic",
+        "cd ~/${workspaceFolderBasename} && make clean && make -j8"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "MSYS64 Saturn Clean Folder",
+      "type": "shell",
+      "command": "e:/Desenvolvimento/SegaSaturn/MSYS64/usr/bin/sh.exe",
+      "args": [
+        "--login",
+        "-ic",
+        "cd ~/${workspaceFolderBasename} && make clean"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Run on Mednafen",
+      "type": "process",
+      "command": "d:/emulation/saturn/Mednafen/mednafen.exe",
+      "args": [
+        "${workspaceFolder}\\cinepak_player.cue"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Run on Yabause",
+      "type": "process",
+      "command": "d:/emulation/saturn/yabause-0.9.15-win64/yabause.exe",
+      "args": [
+        "${workspaceFolder}\\cinepak_player.cue"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      },
+      "isBackground": true
+    }
+  ]
+}
