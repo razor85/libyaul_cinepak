@@ -9,8 +9,6 @@ static smpc_peripheral_digital_t pad0;
 
 static cdfs_filelist_t filelist;
 
-static uint8_t dataCache[DATA_CACHE_SIZE] __aligned(16);
-
 #define SAMPLE_CACHE_SIZE sizeof(film_sample_t) * 10000
 
 static uint8_t sampleCache[SAMPLE_CACHE_SIZE] __aligned(16);
@@ -71,8 +69,7 @@ int main() {
       clearConsole();
       dbgio_flush();
 
-      play_film(movieEntries[menuSelection], dataCache, sampleCache,
-        SAMPLE_CACHE_SIZE);
+      play_film(movieEntries[menuSelection], sampleCache, SAMPLE_CACHE_SIZE);
 
       movieSelected = false;
       dbgio_dev_font_load();

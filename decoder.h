@@ -3,12 +3,6 @@
 
 #include "base.h"
 
-// Maximum frame length is 65536 and we might have audio + video
-#define DATA_CACHE_NUM_SLOTS 64
-// #define DATA_CACHE_SIZE (CDFS_SECTOR_SIZE * DATA_CACHE_NUM_SLOTS)
-#define DATA_CACHE_SIZE (320 * 240 * 2)
-#define DATA_CACHE_SLOT_SIZE CDFS_SECTOR_SIZE
-
 #define FILM_SAMPLE_START_OFFSET 64
 #define SECTORS_PREFETCH 16
 
@@ -43,18 +37,6 @@ typedef struct {
   uint32_t numSamples;
   uint32_t currentSample;
 } film_sample_cache_t;
-  
-typedef union {
-  uint8_t b[4];
-  uint32_t raw;
-} __packed __aligned(4) tmp_cd_data_t;
-
-typedef struct {
-  uint8_t *data;
-  uint32_t pos;
-  uint32_t relPos;
-  uint32_t size;
-} __packed __aligned(4) sample_data_t;
 
 typedef struct {
   uint32_t startFAD;
@@ -107,7 +89,7 @@ extern void initialize_film();
 
 extern void film_vblank();
 
-extern void play_film(cdfs_filelist_entry_t *fsEntry, void *dataCache0,
-  void *sampleCache, uint32_t sampleCacheSize);
+extern void play_film(cdfs_filelist_entry_t *fsEntry, void *sampleCache,
+  uint32_t sampleCacheSize);
 
 #endif // DECODER_H

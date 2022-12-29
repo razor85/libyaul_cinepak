@@ -8,11 +8,10 @@ SH_PROGRAM:= cinepak_player
 SH_SRCS :=   \
   base.c     \
   decoder.c  \
-  md5.c      \
   main.c
 
 SH_LIBRARIES:=
-SH_CFLAGS+= -I. -O3 -g -Wall -Wno-unused-function
+SH_CFLAGS+= -I. -O3 -g -Wall
 IP_VERSION:= V1.000
 IP_RELEASE_DATE:= 20220720
 IP_AREAS:= JTUBKAEL

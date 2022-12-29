@@ -1,12 +1,7 @@
 #include "decoder.h"
-#include "md5.h"
 
 #ifndef MIN
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
-#endif
-
-#ifndef MAX
-#define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
 #endif
 
 #ifndef CLAMP
@@ -30,11 +25,6 @@ uint32_t videoHeight = VIDEO_HEIGHT;
 uint32_t videoStartY = 0;
 uint16_t *vdp2ImagePtr = (uint16_t *)VDP2_VRAM_ADDR(0, 16 * VDP2_WIDTH);
 
-typedef struct {
-  void *addr;
-  uint32_t len;
-} cache_purge_area_t;
-
 // Timer
 uint16_t frtOverflowCount = 0;
 const uint32_t frtTimerDiv = CPU_FRT_NTSC_320_128_COUNT_1MS;
@@ -42,11 +32,6 @@ const uint32_t frtTimerDiv = CPU_FRT_NTSC_320_128_COUNT_1MS;
 // For saving reads
 #define TMP_BUFFER_SIZE 65536
 __aligned(4) uint8_t tmpBuffer[TMP_BUFFER_SIZE];
-
-// Keep track when we asked for updates
-// TODO: Debugging only
-uint32_t currentSampleId = 0;
-uint32_t lastUpdateSampleId = 0;
 
 #define HIRQ 0x0008UL
 #define DRDY 0x0002 /* Data transfer preparations complete */
@@ -64,12 +49,6 @@ uint32_t stream_pos(binary_stream_t *stream);
 void stream_readbytes(binary_stream_t *, void *, uint32_t);
 void stream_skip(binary_stream_t *, uint32_t);
 
-volatile bool dmaTransfering = false;
-void waitDmac() {
-  while (dmaTransfering)
-    cpu_instr_nop();
-}
-
 void frtOviHandler() { frtOverflowCount++; }
 
 static void frtTimerStart(uint16_t count) {
@@ -80,16 +59,6 @@ static void frtTimerStart(uint16_t count) {
 static uint32_t frtTimerEllapsed() {
   uint32_t ticks = (0xFFFF * frtOverflowCount) + cpu_frt_count_get();
   return ticks / frtTimerDiv;
-}
-
-void md5PrintResult(MD5_CTX *md5) {
-  unsigned char md5Result[2048];
-  memset(md5Result, 0, 2048);
-  MD5_Final(md5Result, md5);
-
-  dbgio_printf("MD5\n");
-  for (uint32_t i = 0; i < MD5_DIGEST_LENGTH; i++)
-    dbgio_printf("%02x", md5Result[i]);
 }
 
 inline void clearConsole() { dbgio_printf("[H[2J"); }
@@ -174,7 +143,6 @@ void stripdata_new(stripdata_t *data) {
 volatile bool copyingBlocks = false;
 void dmaCopyBlocksDone(void *data __unused) {
   cpu_cache_purge();
-  dmaTransfering = false;
   copyingBlocks = false;
 }
 
@@ -203,7 +171,6 @@ void stripdata_copyLastCodebooks(stripdata_t *data) {
   };
 
   copyingBlocks = true;
-  dmaTransfering = true;
 
   cpu_dmac_channel_config_set(&cfg);
   cpu_dmac_channel_start(0);
@@ -275,7 +242,7 @@ inline film_sample_t film_sample_get_next_sample(film_sample_cache_t *cache) {
 }
 
 void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
-  void *dataCache0, void *sampleCache, uint32_t sampleCacheSize) {
+  void *sampleCache, uint32_t sampleCacheSize) {
 
   stream->startFAD = entry->starting_fad;
   stream->size = entry->size;
@@ -326,7 +293,6 @@ void triggerDataRequest(binary_stream_t *stream) {
 
   stream->dataAvailable = sectorsReady * CDFS_SECTOR_SIZE;
   stream->remainingSectors -= sectorsReady;
-  lastUpdateSampleId = currentSampleId;
 }
 
 void stream_readbytes(binary_stream_t *stream, void *tmpDst, uint32_t len) {
@@ -890,8 +856,8 @@ void initialize_film() {
 
 void film_vblank() {}
 
-void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
-  void *sampleCache, uint32_t sampleCacheSize) {
+void play_film(cdfs_filelist_entry_t *entry, void *sampleCache,
+  uint32_t sampleCacheSize) {
 
   queueDiskRead(entry->starting_fad, entry->size);
   clearConsole();
@@ -904,7 +870,7 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
 
   // Start reading the file
   binary_stream_t stream;
-  stream_new(&stream, entry, dataCache0, sampleCache, sampleCacheSize);
+  stream_new(&stream, entry, sampleCache, sampleCacheSize);
 
   const uint32_t asciiFilm __unused = stream_read32(&stream);
   DEBUG_REQUIRE_EQ(asciiFilm, ASCII_FILM);
@@ -988,8 +954,6 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
   vdp2_sync();
 
   for (uint32_t sampleId = 0; sampleId < numSamples; ++sampleId) {
-    currentSampleId = sampleId;
-
     uint32_t timeEllapsed = frtTimerEllapsed();
     if (timeEllapsed >= 1000) {
       samplesInSec = samplesInSecCount;
@@ -1010,7 +974,6 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
     debugData[0] = samplesInSec;
     debugData[1] = samplesInSecCount;
     debugData[2] = minSamplesInSec;
-    debugData[3] = currentSampleId == lastUpdateSampleId;
     debugData[4] = bytesInSecCount / 1024;
 
     if (film_sample_is_video(&sample))
