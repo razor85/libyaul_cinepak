@@ -10,6 +10,7 @@
 #define DATA_CACHE_SLOT_SIZE CDFS_SECTOR_SIZE
 
 #define FILM_SAMPLE_START_OFFSET 64
+#define SECTORS_PREFETCH 16
 
 // 0 if video, 1 if audio.
 #define FILM_SAMPLE_CHECK_BIT 0x80000000
@@ -78,22 +79,28 @@ typedef struct {
 } codebook_t;
 
 typedef struct {
+  uint16_t color[4];
+} codebook555_t;
+
+typedef struct {
   codebook_t v1[256];
   codebook_t v4[256];
+  codebook555_t v1RGB[256];
+  codebook555_t v4RGB[256];
 } __aligned(16) strip_codebook_t;
 
 typedef struct {
   strip_codebook_t codebooks[MAX_STRIPS];
   uint32_t strip;
 
-  uint32_t topY;
-  uint32_t writeY;
-
   uint32_t topX;
   uint32_t writeX;
-
-  uint32_t bottomY;
   uint32_t bottomX;
+
+  uint32_t topY;
+  uint32_t writeY;
+  uint32_t bottomY;
+
 } stripdata_t;
 
 extern void initialize_film();

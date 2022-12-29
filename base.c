@@ -1,17 +1,9 @@
 #include "base.h"
 
 void satAssert(const char *filename, int line, const char *msg) {
-  const uint32_t debug1 = 0xDEADC0DE;
-  const uint32_t debug2 = 0x8BADF00D;
-  __asm__ volatile (
-    "mov %[debug1], r12\n"
-    "mov %[debug2], r13\n"
-    :
-    : [debug1] "r" (debug1),
-      [debug2] "r" (debug2)
-  );
+  char *lwRam = (char *)LWRAM(120);
 
-  char *lwRam = (char *)LWRAM(8);
+  cpu_intc_mask_set(15);
   
   if (msg != NULL) {
     sprintf(lwRam, "%s\n", msg);
@@ -20,11 +12,13 @@ void satAssert(const char *filename, int line, const char *msg) {
     sprintf(lwRam, "Assertion failed at %s:%d\n\n", filename, line);
     dbgio_printf("Assertion failed at %s:%d\n\n", filename, line);
   }
-    
-  dbgio_flush();
 
-  while (1) {
-    vdp2_sync();
-    vdp2_sync_wait();
+  dbgio_flush();
+  vdp2_sync();
+  vdp2_sync_wait();
+
+  __asm__ volatile("sleep\n");
+
+  while (true) {
   }
 }

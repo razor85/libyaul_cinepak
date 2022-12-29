@@ -139,15 +139,36 @@ static inline uint32_t getSectorsReady(uint32_t wantSectors) {
 inline void codebook_new(codebook_t *cb, binary_stream_t *stream) {
   stream_readbytes(stream, cb, sizeof(codebook_t));
 }
-  
+
+inline void codebook555_new(codebook_t *book, codebook555_t *cb555) {
+  // | r |   | 1.0  0.0  2.0 | | y |
+  // | g | = | 1.0 -0.5 -1.0 | | u |
+  // | b |   | 1.0  2.0  0.0 | | v |
+  const int16_t cr = (book->v << 1);
+  const int16_t cg = -(book->u >> 1) - book->v;
+  const int16_t cb = +(book->u << 1);
+
+  for (uint32_t i = 0; i < 4; ++i) {
+    const int r = book->y[i] + cr;
+    const int g = book->y[i] + cg;
+    const int b = book->y[i] + cb;
+
+    const uint8_t nr = CLAMP(r, 0, 255);
+    const uint8_t ng = CLAMP(g, 0, 255);
+    const uint8_t nb = CLAMP(b, 0, 255);
+
+    const rgb1555_t color = RGB1555_INITIALIZER(1, nr >> 3, ng >> 3, nb >> 3);
+    cb555->color[i] = color.raw;
+  }
+}
+
 void stripdata_new(stripdata_t *data) {
+  memset(data->codebooks, 0, MAX_STRIPS * sizeof(strip_codebook_t));
   data->strip = 0;
   data->writeX = data->topX = 0;
   data->bottomX = 320;
   data->writeY = data->topY = 0;
   data->bottomY = 240;
-  
-  memset(data->codebooks, 0, MAX_STRIPS * sizeof(strip_codebook_t));
 }
 
 volatile bool copyingBlocks = false;
@@ -165,7 +186,7 @@ inline static void waitCopyingBlocks() {
 void stripdata_copyLastCodebooks(stripdata_t *data) {
   DEBUG_REQUIRE_GT(data->strip, 0);
   DEBUG_REQUIRE_LT(data->strip, MAX_STRIPS);
-  
+
   waitCopyingBlocks();
 
   cpu_dmac_cfg_t cfg = {
@@ -188,12 +209,20 @@ void stripdata_copyLastCodebooks(stripdata_t *data) {
   cpu_dmac_channel_start(0);
 }
 
-inline codebook_t* stripdata_getV1Codebook(stripdata_t *data) {
+inline codebook_t *stripdata_getV1Codebook(stripdata_t *data) {
   return data->codebooks[data->strip].v1;
 }
 
-inline codebook_t* stripdata_getV4Codebook(stripdata_t *data) {
+inline codebook555_t *stripdata_getV1Codebook555(stripdata_t *data) {
+  return data->codebooks[data->strip].v1RGB;
+}
+
+inline codebook_t *stripdata_getV4Codebook(stripdata_t *data) {
   return data->codebooks[data->strip].v4;
+}
+
+inline codebook555_t *stripdata_getV4Codebook555(stripdata_t *data) {
+  return data->codebooks[data->strip].v4RGB;
 }
 
 // stream must be exactly at the start of the sample descriptions
@@ -222,7 +251,7 @@ void film_sample_cache_new(binary_stream_t *stream, uint32_t totalNumSamples) {
   while (missingSamples) {
     cd_film_sample_t sample;
     stream_readbytes(stream, &sample, sizeof(cd_film_sample_t));
-    
+
     const bool isAudio = (sample.info1 == 0xFFFFFFFF);
     DEBUG_REQUIRE_EQ(sample.length % 4, 0);
 
@@ -260,7 +289,9 @@ void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
   stream->eof = false;
 
   // Fetch first sectors
-  const uint32_t sectorsReady = getSectorsReady(MIN(stream->remainingSectors, 200));
+  const uint32_t sectorsReady = getSectorsReady(
+    MIN(stream->remainingSectors, SECTORS_PREFETCH));
+
   DEBUG_REQUIRE_GT(sectorsReady, 0);
 
   int status __unused = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
@@ -276,12 +307,14 @@ void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
 
 void triggerDataRequest(binary_stream_t *stream) {
   DEBUG_REQUIRE_NE(stream->remainingSectors, 0);
-      
+
   // End previous transfers
   int status __unused = cd_block_cmd_data_transfer_end();
   DEBUG_REQUIRE_EQ(status, 0);
 
-  const uint32_t sectorsReady = getSectorsReady(MIN(stream->remainingSectors, 16));
+  const uint32_t sectorsReady = getSectorsReady(
+    MIN(stream->remainingSectors, SECTORS_PREFETCH));
+
   DEBUG_REQUIRE_GT(sectorsReady, 0);
 
   status = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
@@ -295,7 +328,7 @@ void triggerDataRequest(binary_stream_t *stream) {
   stream->remainingSectors -= sectorsReady;
   lastUpdateSampleId = currentSampleId;
 }
-  
+
 void stream_readbytes(binary_stream_t *stream, void *tmpDst, uint32_t len) {
   DEBUG_REQUIRE_EQ(len % 2, 0);
   DEBUG_REQUIRE_NE(tmpDst, NULL);
@@ -312,12 +345,14 @@ void stream_readbytes(binary_stream_t *stream, void *tmpDst, uint32_t len) {
     const uint32_t readSize = MIN(stream->dataAvailable, remainingBytes);
     const uint32_t readSizeLoop = readSize >> 1;
     
-    for (volatile uint32_t i = 0; i < readSizeLoop; ++i) {
-      *destPtr++ = *cdData;
-    }
-
     stream->dataAvailable -= readSize;
     remainingBytes -= readSize;
+
+    for (volatile uint32_t i = 0; i < readSizeLoop; ++i) {
+      destPtr[i] = *cdData;
+    }
+
+    destPtr += readSizeLoop;
   }
 
   stream->offset += len;
@@ -333,7 +368,7 @@ void stream_skip(binary_stream_t *stream, uint32_t len) {
   while (remainingBytes) {
     if (!stream->dataAvailable)
       triggerDataRequest(stream);
-    
+
     const uint32_t readSize = MIN(stream->dataAvailable, remainingBytes);
     const uint32_t readSizeLoop = readSize >> 1;
 
@@ -363,59 +398,14 @@ uint32_t stream_read32(binary_stream_t *stream) {
   return data;
 }
 
-inline uint32_t stream_pos(binary_stream_t *stream) {
-  return stream->offset;
-}
+inline uint32_t stream_pos(binary_stream_t *stream) { return stream->offset; }
 
-inline bool film_sample_is_video(const film_sample_t* sample) {
+inline bool film_sample_is_video(const film_sample_t *sample) {
   return sample->interval != 0xFFFFFFFF;
 }
 
-inline bool film_sample_is_audio(const film_sample_t* sample) {
+inline bool film_sample_is_audio(const film_sample_t *sample) {
   return sample->interval == 0xFFFFFFFF;
-}
-
-inline void writeYUV(uint8_t cy, int16_t cr, int16_t cg, int16_t cb,
-  uint32_t index) {
-
-  DEBUG_REQUIRE_LT(index, VDP2_WIDTH * VDP2_HEIGHT);
-
-  // | r |   | 1.0  0.0  2.0 | | y |
-  // | g | = | 1.0 -0.5 -1.0 | | u |
-  // | b |   | 1.0  2.0  0.0 | | v |
-  const int r = cy + cr;
-  const int g = cy + cg;
-  const int b = cy + cb;
-
-  // TODO:
-  const uint8_t nr = CLAMP(r, 0, 255);
-  const uint8_t ng = CLAMP(g, 0, 255);
-  const uint8_t nb = CLAMP(b, 0, 255);
-
-  const rgb1555_t color = RGB1555_INITIALIZER(1, nr >> 3, ng >> 3, nb >> 3);
-  vdp2ImagePtr[index] = color.raw;
-}
-
-// Write the same value twice horizontally
-inline void writeYUV2(uint8_t cy, int16_t cr, int16_t cg, int16_t cb,
-  uint32_t index) {
-
-  DEBUG_REQUIRE_LT(index, VDP2_WIDTH * VDP2_HEIGHT);
-
-  // | r |   | 1.0  0.0  2.0 | | y |
-  // | g | = | 1.0 -0.5 -1.0 | | u |
-  // | b |   | 1.0  2.0  0.0 | | v |
-  const int r = cy + cr;
-  const int g = cy + cg;
-  const int b = cy + cb;
-
-  // TODO:
-  const uint8_t nr = CLAMP(r, 0, 255);
-  const uint8_t ng = CLAMP(g, 0, 255);
-  const uint8_t nb = CLAMP(b, 0, 255);
-
-  const rgb1555_t color = RGB1555_INITIALIZER(1, nr >> 3, ng >> 3, nb >> 3);
-  vdp2ImagePtr[index] = vdp2ImagePtr[index + 1] = color.raw;
 }
 
 inline void stripdata_skipBlock(stripdata_t *data) {
@@ -427,20 +417,13 @@ inline void stripdata_skipBlock(stripdata_t *data) {
 }
 
 void renderPixel1(stripdata_t *data, uint8_t c0) {
-  const codebook_t e0 = stripdata_getV1Codebook(data)[c0];
+  const codebook555_t e0 = stripdata_getV1Codebook555(data)[c0];
   const uint32_t x = data->writeX;
   const uint32_t y = data->writeY;
 
   // VDP2 image has 512x256
   uint32_t imageIndex = ((videoStartY + y) * VDP2_WIDTH) + x;
   DEBUG_REQUIRE_LT(imageIndex, VDP2_WIDTH * VDP2_HEIGHT);
-
-  // | r |   | 1.0  0.0  2.0 | | y |
-  // | g | = | 1.0 -0.5 -1.0 | | u |
-  // | b |   | 1.0  2.0  0.0 | | v |
-  const int16_t cr = (e0.v << 1);
-  const int16_t cg = - (e0.u >> 1) - e0.v;
-  const int16_t cb = + (e0.u << 1);
 
   // +----+----+  +---+  +---+
   // | y0 | y1 |  | u |  | v |
@@ -451,65 +434,51 @@ void renderPixel1(stripdata_t *data, uint8_t c0) {
   if (y + 0 >= data->bottomY)
     return;
 
-  writeYUV2(e0.y[0], cr, cg, cb, imageIndex);
-  writeYUV2(e0.y[1], cr, cg, cb, imageIndex + 2);
-  
+  vdp2ImagePtr[imageIndex] = vdp2ImagePtr[imageIndex + 1] = e0.color[0];
+  vdp2ImagePtr[imageIndex + 2] = vdp2ImagePtr[imageIndex + 3] = e0.color[1];
+
   if (y + 1 >= data->bottomY)
     return;
 
   imageIndex += VDP2_WIDTH;
+  vdp2ImagePtr[imageIndex] = vdp2ImagePtr[imageIndex + 1] = e0.color[0];
+  vdp2ImagePtr[imageIndex + 2] = vdp2ImagePtr[imageIndex + 3] = e0.color[1];
 
-  writeYUV2(e0.y[0], cr, cg, cb, imageIndex);
-  writeYUV2(e0.y[1], cr, cg, cb, imageIndex + 2);
-  
   if (y + 2 >= data->bottomY)
     return;
-  
-  imageIndex += VDP2_WIDTH;
 
-  writeYUV2(e0.y[2], cr, cg, cb, imageIndex);
-  writeYUV2(e0.y[3], cr, cg, cb, imageIndex + 2);
-  
+  imageIndex += VDP2_WIDTH;
+  vdp2ImagePtr[imageIndex] = vdp2ImagePtr[imageIndex + 1] = e0.color[2];
+  vdp2ImagePtr[imageIndex + 2] = vdp2ImagePtr[imageIndex + 3] = e0.color[3];
+
   if (y + 3 >= data->bottomY)
     return;
-  
-  imageIndex += VDP2_WIDTH;
 
-  writeYUV2(e0.y[2], cr, cg, cb, imageIndex);
-  writeYUV2(e0.y[3], cr, cg, cb, imageIndex + 2);
+  imageIndex += VDP2_WIDTH;
+  vdp2ImagePtr[imageIndex] = vdp2ImagePtr[imageIndex + 1] = e0.color[2];
+  vdp2ImagePtr[imageIndex + 2] = vdp2ImagePtr[imageIndex + 3] = e0.color[3];
 }
 
 void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
   uint8_t c3) {
 
-  const codebook_t *codebook = stripdata_getV4Codebook(data);
-  const codebook_t *e0 = &codebook[c0];
-  const codebook_t *e1 = &codebook[c1];
-  const codebook_t *e2 = &codebook[c2];
-  const codebook_t *e3 = &codebook[c3];
+  const codebook555_t *codebook = stripdata_getV4Codebook555(data);
+  const codebook555_t *e0 = &codebook[c0];
+  const codebook555_t *e1 = &codebook[c1];
+  const codebook555_t *e2 = &codebook[c2];
+  const codebook555_t *e3 = &codebook[c3];
 
   const uint32_t x = data->writeX;
   const uint32_t y = data->writeY;
 
   uint32_t imageIndex = ((videoStartY + y) * VDP2_WIDTH) + x;
   DEBUG_REQUIRE_LT(imageIndex, VDP2_WIDTH * VDP2_HEIGHT);
-  
-  // | r |   | 1.0  0.0  2.0 | | y |
-  // | g | = | 1.0 -0.5 -1.0 | | u |
-  // | b |   | 1.0  2.0  0.0 | | v |
-  const int16_t cr0 = (e0->v << 1);
-  const int16_t cg0 = - (e0->u >> 1) - e0->v;
-  const int16_t cb0 = + (e0->u << 1);
 
-  const int16_t cr1 = (e1->v << 1);
-  const int16_t cg1 = - (e1->u >> 1) - e1->v;
-  const int16_t cb1 = + (e1->u << 1);
-
-  // +------+------+------+------+  +-----+-----+  +-----+-----+
-  // | e0y0 | e0y1 | e1y0 | e1y1 |  | e0u | e1u |  | e0v | e1v |
-  // +------+------+------+------+  +-----+-----+  +-----+-----+
-  // | e0y2 | e0y3 | e1y2 | e1y3 |  | e2u | e3u |  | e2v | e3v |
-  // +------+------+------+------+  +-----+-----+  +-----+-----+
+  // +------+------+------+------+
+  // | e0y0 | e0y1 | e1y0 | e1y1 |
+  // +------+------+------+------+
+  // | e0y2 | e0y3 | e1y2 | e1y3 |
+  // +------+------+------+------+
   // | e2y0 | e2y1 | e3y0 | e3y1 |
   // +------+------+------+------+
   // | e2y2 | e2y3 | e3y2 | e3y3 |
@@ -517,51 +486,37 @@ void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
   if (y + 0 >= data->bottomY)
     return;
 
-  writeYUV(e0->y[0], cr0, cg0, cb0, imageIndex++);
-  writeYUV(e0->y[1], cr0, cg0, cb0, imageIndex++);
-  writeYUV(e1->y[0], cr1, cg1, cb1, imageIndex++);
-  writeYUV(e1->y[1], cr1, cg1, cb1, imageIndex);
+  vdp2ImagePtr[imageIndex++] = e0->color[0];
+  vdp2ImagePtr[imageIndex++] = e0->color[1];
+  vdp2ImagePtr[imageIndex++] = e1->color[0];
+  vdp2ImagePtr[imageIndex] = e1->color[1];
 
   if (y + 1 >= data->bottomY)
     return;
-  
-  imageIndex += VDP2_WIDTH - 3;
 
-  writeYUV(e0->y[2], cr0, cg0, cb0, imageIndex++);
-  writeYUV(e0->y[3], cr0, cg0, cb0, imageIndex++);
-  writeYUV(e1->y[2], cr1, cg1, cb1, imageIndex++);
-  writeYUV(e1->y[3], cr1, cg1, cb1, imageIndex);
+  imageIndex += VDP2_WIDTH - 3;
+  vdp2ImagePtr[imageIndex++] = e0->color[2];
+  vdp2ImagePtr[imageIndex++] = e0->color[3];
+  vdp2ImagePtr[imageIndex++] = e1->color[2];
+  vdp2ImagePtr[imageIndex] = e1->color[3];
 
   if (y + 2 >= data->bottomY)
     return;
-  
+
   imageIndex += VDP2_WIDTH - 3;
-
-  // | r |   | 1.0  0.0  2.0 | | y |
-  // | g | = | 1.0 -0.5 -1.0 | | u |
-  // | b |   | 1.0  2.0  0.0 | | v |
-  const int16_t cr2 = (e2->v << 1);
-  const int16_t cg2 = - (e2->u >> 1) - e2->v;
-  const int16_t cb2 = + (e2->u << 1);
-
-  const int16_t cr3 = (e3->v << 1);
-  const int16_t cg3 = - (e3->u >> 1) - e3->v;
-  const int16_t cb3 = + (e3->u << 1);
-
-  writeYUV(e2->y[0], cr2, cg2, cb2, imageIndex++);
-  writeYUV(e2->y[1], cr2, cg2, cb2, imageIndex++);
-  writeYUV(e3->y[0], cr3, cg3, cb3, imageIndex++);
-  writeYUV(e3->y[1], cr3, cg3, cb3, imageIndex);
+  vdp2ImagePtr[imageIndex++] = e2->color[0];
+  vdp2ImagePtr[imageIndex++] = e2->color[1];
+  vdp2ImagePtr[imageIndex++] = e3->color[0];
+  vdp2ImagePtr[imageIndex] = e3->color[1];
 
   if (y + 3 >= data->bottomY)
     return;
 
   imageIndex += VDP2_WIDTH - 3;
-
-  writeYUV(e2->y[2], cr2, cg2, cb2, imageIndex++);
-  writeYUV(e2->y[3], cr2, cg2, cb2, imageIndex++);
-  writeYUV(e3->y[2], cr3, cg3, cb3, imageIndex++);
-  writeYUV(e3->y[3], cr3, cg3, cb3, imageIndex);
+  vdp2ImagePtr[imageIndex++] = e2->color[2];
+  vdp2ImagePtr[imageIndex++] = e2->color[3];
+  vdp2ImagePtr[imageIndex++] = e3->color[2];
+  vdp2ImagePtr[imageIndex] = e3->color[3];
 }
 
 void readVectors(binary_stream_t *stream, stripdata_t *data,
@@ -616,7 +571,7 @@ void readVectorsInter(binary_stream_t *stream, stripdata_t *data,
 
   DEBUG_REQUIRE_LT(chunkDataLength, TMP_BUFFER_SIZE);
   stream_readbytes(stream, tmpBuffer, chunkDataLength);
-  
+
   uint32_t remainingSectionBytes = chunkDataLength - 4;
 
   // We keep reading flags as long as it is possible. We first read 4
@@ -663,7 +618,7 @@ void readVectorsInter(binary_stream_t *stream, stripdata_t *data,
       } else {
         if (remainingSectionBytes < 1)
           break;
-        
+
         // V1
         renderPixel1(data, tmpData[0]);
         tmpData += 1;
@@ -672,7 +627,7 @@ void readVectorsInter(binary_stream_t *stream, stripdata_t *data,
     }
 
     stripdata_skipBlock(&stripData);
-      
+
     // If we read all the bits, we just fetch the next flags.
     if (shifts == 31) {
       if (remainingSectionBytes < 4)
@@ -689,7 +644,7 @@ void readVectorsInter(binary_stream_t *stream, stripdata_t *data,
     }
   }
 }
-    
+
 void readV1VectorsInChunk(binary_stream_t *stream, stripdata_t *data,
   uint16_t chunkDataLength) {
 
@@ -722,7 +677,7 @@ void readV1VectorsInChunk(binary_stream_t *stream, stripdata_t *data,
 
     readBytes -= readNow;
   }
-  
+
   if (remainingSectionBytes)
     stream_skip(stream, remainingSectionBytes);
 }
@@ -731,7 +686,7 @@ void readChunk(uint16_t chunkID, uint16_t chunkDataLength,
   binary_stream_t *stream, stripdata_t *data) {
 
   DEBUG_REQUIRE_EQ(chunkDataLength % 2, 0);
-  
+
   // If we are still copying the blocks.
   waitCopyingBlocks();
 
@@ -741,17 +696,25 @@ void readChunk(uint16_t chunkID, uint16_t chunkDataLength,
   case 0x2200:
     {
       codebook_t *codebookPtr;
-      if (chunkID == 0x2000)
+      codebook555_t *codebook555Ptr;
+      if (chunkID == 0x2000) {
         codebookPtr = stripdata_getV4Codebook(data);
-      else
+        codebook555Ptr = stripdata_getV4Codebook555(data);
+      } else {
         codebookPtr = stripdata_getV1Codebook(data);
-  
+        codebook555Ptr = stripdata_getV1Codebook555(data);
+      }
+
       uint32_t remainingSectionBytes = chunkDataLength;
 
       const uint32_t numReads = remainingSectionBytes / 6;
       const uint32_t numReadBytes = numReads * 6;
 
       stream_readbytes(stream, codebookPtr, numReadBytes);
+      for (uint32_t i = 0; i < 256; ++i) {
+        codebook555_new(&codebookPtr[i], &codebook555Ptr[i]);
+      }
+
       remainingSectionBytes -= numReadBytes;
 
       // Deviant format shenanigans
@@ -765,10 +728,14 @@ void readChunk(uint16_t chunkID, uint16_t chunkDataLength,
   case 0x2300:
     {
       codebook_t *codebookPtr;
-      if (chunkID == 0x2100)
+      codebook555_t *codebook555Ptr;
+      if (chunkID == 0x2100) {
         codebookPtr = stripdata_getV4Codebook(data);
-      else
+        codebook555Ptr = stripdata_getV4Codebook555(data);
+      } else {
         codebookPtr = stripdata_getV1Codebook(data);
+        codebook555Ptr = stripdata_getV1Codebook555(data);
+      }
 
       uint32_t remainingSectionBytes = chunkDataLength;
       while (remainingSectionBytes >= 4) {
@@ -778,14 +745,16 @@ void readChunk(uint16_t chunkID, uint16_t chunkDataLength,
         for (uint32_t i = 0; i < 32; ++i) {
           if (flags & 0x80000000) {
             codebook_new(codebookPtr, stream);
+            codebook555_new(codebookPtr, codebook555Ptr);
             remainingSectionBytes -= 6;
           }
 
           codebookPtr++;
+          codebook555Ptr++;
           flags <<= 1;
         }
       }
-  
+
       if (remainingSectionBytes)
         stream_skip(stream, remainingSectionBytes);
     }
@@ -843,6 +812,8 @@ typedef struct {
 } videoHeader;
 
 void parseVideo(binary_stream_t *stream) {
+  static_assert(sizeof(videoHeader) == 12);
+
   videoHeader cvidHeader;
   stream_readbytes(stream, &cvidHeader, sizeof(videoHeader));
 
@@ -858,7 +829,7 @@ void parseVideo(binary_stream_t *stream) {
 
     uint16_t tmpStripBuffer[6];
     stream_readbytes(stream, tmpStripBuffer, 6 * sizeof(uint16_t));
-    
+
     const uint16_t stripDataLength = tmpStripBuffer[1];
 
     stripData.topY = stripData.writeY = tmpStripBuffer[2];
@@ -885,7 +856,8 @@ void parseVideo(binary_stream_t *stream) {
       const uint16_t cvidChunkID = stream_read16(stream);
       const uint16_t cvidChunkDataLength = stream_read16(stream) - 4;
 
-      const size_t expectedEnd __unused = stream_pos(stream) + cvidChunkDataLength;
+      const size_t expectedEnd __unused = stream_pos(stream) +
+        cvidChunkDataLength;
       LOGGER("%u - Chunk ID 0x%X, length = %d (up to %u) to %d,%d\n",
         stream_pos(stream) - 4, cvidChunkID, cvidChunkDataLength, expectedEnd,
         stripData.writeX, stripData.writeY);
@@ -899,7 +871,7 @@ void parseVideo(binary_stream_t *stream) {
     DEBUG_REQUIRE_EQ(stream_pos(stream), stripLimit);
   }
 }
-    
+
 inline void parseSample(const film_sample_t *sample, binary_stream_t *stream) {
   if (film_sample_is_audio(sample)) {
     stream_skip(stream, sample->length);
@@ -910,13 +882,13 @@ inline void parseSample(const film_sample_t *sample, binary_stream_t *stream) {
 
 void initialize_film() {
   memset(vdp2ImagePtr, 0, VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
-  
-  const int status __unused = cd_block_cmd_sector_length_set(SECTOR_LENGTH_2048);
+
+  const int status __unused = cd_block_cmd_sector_length_set(
+    SECTOR_LENGTH_2048);
   DEBUG_REQUIRE_EQ(status, 0);
 }
 
-void film_vblank() {
-}
+void film_vblank() {}
 
 void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
   void *sampleCache, uint32_t sampleCacheSize) {
@@ -942,7 +914,7 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
   DEBUG_REQUIRE_EQ(filmVersion, ASCII_1d09);
 
   stream_skip(&stream, 4); // Unknown
-  
+
   const uint32_t asciiFdsc __unused = stream_read32(&stream);
   DEBUG_REQUIRE_EQ(asciiFdsc, ASCII_FDSC);
 
@@ -972,7 +944,7 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
   dbgio_printf("Audio: %d channels, %d bits (comp = %d), %d Hz\n",
     audioChannels, audioSamplingResolution, audioCompression,
     audioSamplingFrequencyHz);
- 
+
   // Unknown
   stream_skip(&stream, 6);
 
@@ -984,16 +956,17 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
 
   const uint32_t framerateBaseFrequencyHz = stream_read32(&stream);
   const uint32_t numSamples = stream_read32(&stream);
+  stream.sampleCache.numSamples = numSamples;
 
   dbgio_printf("Frame rate base frequency: %d Hz with %d samples\n",
     framerateBaseFrequencyHz, numSamples);
-  
+
   const uint32_t sampleDescriptionPos = stream_pos(&stream);
   const uint32_t sampleDataPos = filmHeaderLength;
 
   // Must be called just before the sample list
   film_sample_cache_new(&stream, numSamples);
-  
+
   dbgio_printf("SamplePos: %d\nSampleDataPos: %d\nPos: %d\n",
     sampleDescriptionPos, sampleDataPos, stream_pos(&stream));
 
@@ -1006,14 +979,15 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
   uint32_t samplesInSec = 0;
   uint32_t minSamplesInSec = 0xFFFFFFFF;
   uint32_t samplesInSecCount = 0;
+  uint32_t bytesInSecCount = 0;
 
-  uint32_t *debugData = (uint32_t*) LWRAM(0);
-  
+  uint32_t *debugData = (uint32_t *)LWRAM(0);
+
   clearConsole();
   dbgio_flush();
   vdp2_sync();
 
-  for (uint32_t sampleId = 0; sampleId < 0xFFFFFFFF; ++sampleId) {
+  for (uint32_t sampleId = 0; sampleId < numSamples; ++sampleId) {
     currentSampleId = sampleId;
 
     uint32_t timeEllapsed = frtTimerEllapsed();
@@ -1023,26 +997,28 @@ void play_film(cdfs_filelist_entry_t *entry, void *dataCache0,
         minSamplesInSec = samplesInSec;
 
       samplesInSecCount = 0;
+      bytesInSecCount = 0;
       frtTimerStart(timeEllapsed - 1000);
     }
 
     film_sample_t sample = film_sample_get_next_sample(&stream.sampleCache);
     parseSample(&sample, &stream);
     samplesInSecCount++;
+    bytesInSecCount += sample.length;
 
     // Samples, samplesInSecCount, minSamplesInSec, isUpdating.
     debugData[0] = samplesInSec;
     debugData[1] = samplesInSecCount;
     debugData[2] = minSamplesInSec;
     debugData[3] = currentSampleId == lastUpdateSampleId;
+    debugData[4] = bytesInSecCount / 1024;
 
     if (film_sample_is_video(&sample))
       vdp2_sync();
   }
-    
+  
   const int status __unused = cd_block_cmd_data_transfer_end();
   DEBUG_REQUIRE_EQ(status, 0);
 
   memset(vdp2ImagePtr, 0, VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
 }
-
