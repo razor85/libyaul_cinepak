@@ -11,9 +11,7 @@ static cdfs_filelist_t filelist;
 
 #define SAMPLE_CACHE_SIZE sizeof(film_sample_t) * 10000
 
-static uint8_t sampleCache[SAMPLE_CACHE_SIZE] __aligned(16);
-
-void clearConsole() { dbgio_printf("[H[2J"); }
+static uint8_t sampleCache[SAMPLE_CACHE_SIZE] __aligned(2);
 
 int main() {
   cdfs_filelist_entry_t *const filelist_entries = cdfs_entries_alloc(-1);
@@ -145,15 +143,13 @@ void user_init(void) {
 
   vdp_sync_vblank_out_set(_vblank_out_handler, NULL);
 
-  cpu_frt_init(CPU_FRT_CLOCK_DIV_128);
+  // cpu_frt_init(CPU_FRT_CLOCK_DIV_128);
 
   dbgio_init();
   dbgio_dev_default_init(DBGIO_DEV_VDP2_ASYNC);
   dbgio_dev_font_load();
 
   vdp2_tvmd_display_set();
-
-  cd_block_init();
 
   smpc_peripheral_init();
 

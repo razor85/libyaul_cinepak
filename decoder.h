@@ -4,7 +4,7 @@
 #include "base.h"
 
 #define FILM_SAMPLE_START_OFFSET 64
-#define SECTORS_PREFETCH 16
+#define SECTORS_PREFETCH 8
 
 // 0 if video, 1 if audio.
 #define FILM_SAMPLE_CHECK_BIT 0x80000000
@@ -91,5 +91,7 @@ extern void film_vblank();
 
 extern void play_film(cdfs_filelist_entry_t *fsEntry, void *sampleCache,
   uint32_t sampleCacheSize);
+
+static inline void clearConsole() { dbgio_printf("[H[2J"); }
 
 #endif // DECODER_H
