@@ -9,9 +9,10 @@ static smpc_peripheral_digital_t pad0;
 
 static cdfs_filelist_t filelist;
 
-#define SAMPLE_CACHE_SIZE sizeof(film_sample_t) * 10000
+#define SAMPLE_CACHE_SIZE 20000
+static film_sample_t sampleCache[SAMPLE_CACHE_SIZE];
 
-static uint8_t sampleCache[SAMPLE_CACHE_SIZE] __aligned(2);
+void clearLog() { dbgio_printf("[H[2J"); }
 
 int main() {
   cdfs_filelist_entry_t *const filelist_entries = cdfs_entries_alloc(-1);
@@ -39,7 +40,7 @@ int main() {
     smpc_peripheral_process();
     smpc_peripheral_digital_port(1, &pad0);
 
-    clearConsole();
+    clearLog();
 
     if (!movieSelected) {
       for (uint32_t i = 0; i < numMovieEntries; ++i) {
@@ -64,7 +65,7 @@ int main() {
       }
 
     } else {
-      clearConsole();
+      clearLog();
       dbgio_flush();
 
       play_film(movieEntries[menuSelection], sampleCache, SAMPLE_CACHE_SIZE);
@@ -143,7 +144,7 @@ void user_init(void) {
 
   vdp_sync_vblank_out_set(_vblank_out_handler, NULL);
 
-  // cpu_frt_init(CPU_FRT_CLOCK_DIV_128);
+  cpu_frt_init(CPU_FRT_CLOCK_DIV_128);
 
   dbgio_init();
   dbgio_dev_default_init(DBGIO_DEV_VDP2_ASYNC);

@@ -22,7 +22,7 @@
 typedef struct {
   uint32_t interval; // 0xFFFFFFFF if audio
   uint32_t length;
-} film_sample_t;
+} __packed __aligned(4) film_sample_t;
 
 // A sample stored in the STAB table is:
 typedef struct {
@@ -89,9 +89,7 @@ extern void initialize_film();
 
 extern void film_vblank();
 
-extern void play_film(cdfs_filelist_entry_t *fsEntry, void *sampleCache,
+extern void play_film(cdfs_filelist_entry_t *fsEntry, film_sample_t *sampleCache,
   uint32_t sampleCacheSize);
-
-static inline void clearConsole() { dbgio_printf("[H[2J"); }
 
 #endif // DECODER_H
