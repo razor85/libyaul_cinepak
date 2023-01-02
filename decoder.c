@@ -37,10 +37,9 @@ stripdata_t stripData;
 uint32_t videoWidth = VIDEO_WIDTH;
 uint32_t videoHeight = VIDEO_HEIGHT;
 uint32_t videoStartY = 0;
-// uint16_t *vdp2ImagePtr = (uint16_t *)VDP2_VRAM_ADDR(0, 16 * VDP2_WIDTH);
+uint16_t *vdp2DestinationBuffer = (uint16_t *)VDP2_VRAM_ADDR(0, 16 * VDP2_WIDTH);
 uint16_t videoTmpBuffer[VDP2_WIDTH * VDP2_HEIGHT];
 uint16_t *vdp2ImagePtr = videoTmpBuffer;
-bool videoNeedsCopy = false;
 
 // Timer
 uint16_t frtOverflowCount = 0;
@@ -1026,7 +1025,8 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
     bytesInSecCount += sample.length;
 
     if (film_sample_is_video(&sample)) {
-      videoNeedsCopy = true;
+      vdp_dma_enqueue(vdp2DestinationBuffer, vdp2ImagePtr,
+        VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
     }
 
     clearLog();
