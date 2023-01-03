@@ -214,7 +214,6 @@ void user_init(void) {
 }
 
 static void _vblank_in_handler(void *work __unused) {
-  film_vblank();
 }
 
 static void _vblank_out_handler(void *work __unused) {

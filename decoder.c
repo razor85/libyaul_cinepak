@@ -150,9 +150,9 @@ inline void codebook555_new(codebook_t *book, codebook555_t *cb555) {
   const int16_t cb = +(book->u << 1);
 
   for (uint32_t i = 0; i < 4; ++i) {
-    const int r = book->y[i] + cr;
-    const int g = book->y[i] + cg;
-    const int b = book->y[i] + cb;
+    const int16_t r = book->y[i] + cr;
+    const int16_t g = book->y[i] + cg;
+    const int16_t b = book->y[i] + cb;
 
     const uint8_t nr = CLAMP(r, 0, 255);
     const uint8_t ng = CLAMP(g, 0, 255);
@@ -294,7 +294,7 @@ void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
   DEBUG_REQUIRE_EQ(status, 0);
 
   // Wait until data is available
-  bool ready = false;
+  bool ready __unused = false;
   for (volatile uint32_t i = 0; i < 240000; ++i) {
     if (MEMORY_READ(16, CD_BLOCK(HIRQ)) & DRDY) {
       ready = true;
@@ -330,7 +330,7 @@ void triggerDataRequest(binary_stream_t *stream) {
   }
 
   // Wait until data is available
-  bool ready = false;
+  bool ready __unused = false;
   for (volatile uint32_t i = 0; i < 240000; ++i) {
     if (MEMORY_READ(16, CD_BLOCK(HIRQ)) & DRDY) {
       ready = true;
@@ -919,9 +919,6 @@ void initialize_film() {
   vdp2_sync_wait();
 }
 
-void film_vblank() {
-}
-
 void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
   uint32_t sampleCacheSize) {
 
@@ -1034,8 +1031,9 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
     bytesInSecCount += sample.length;
 
     if (film_sample_is_video(&sample)) {
-      vdp_dma_enqueue(vdp2DestinationBuffer, vdp2ImagePtr,
-        VIDEO_WIDTH * VIDEO_HEIGHT * sizeof(uint16_t));
+      const uint32_t delta = videoStartY * VIDEO_WIDTH;
+      vdp_dma_enqueue(vdp2DestinationBuffer + delta, vdp2ImagePtr + delta,
+        VIDEO_WIDTH * videoHeight * sizeof(uint16_t));
     }
 
     clearLog();
