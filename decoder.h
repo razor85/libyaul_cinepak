@@ -89,6 +89,9 @@ extern void initialize_film();
 
 extern void film_vblank();
 
+// Return 0 to stop film playback
+extern int film_loop_handler();
+
 extern void play_film(cdfs_filelist_entry_t *fsEntry, film_sample_t *sampleCache,
   uint32_t sampleCacheSize);
 

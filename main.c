@@ -14,6 +14,16 @@ static film_sample_t sampleCache[SAMPLE_CACHE_SIZE];
 
 void clearLog() { dbgio_printf("[H[2J"); }
 
+int film_loop_handler() {
+  smpc_peripheral_process();
+  smpc_peripheral_digital_port(1, &pad0);
+  if (pad0.released.button.b) {
+    return false;
+  } else {
+    return true;
+  }
+}
+
 int main() {
   cdfs_filelist_entry_t *const filelist_entries = cdfs_entries_alloc(-1);
   DEBUG_REQUIRE(filelist_entries != NULL);
@@ -68,6 +78,7 @@ int main() {
       clearLog();
       dbgio_flush();
 
+      initialize_film();
       play_film(movieEntries[menuSelection], sampleCache, SAMPLE_CACHE_SIZE);
 
       movieSelected = false;
@@ -95,38 +106,38 @@ void user_init(void) {
   vdp2_scrn_bitmap_format_set(&format);
   vdp2_scrn_priority_set(VDP2_SCRN_NBG0, 3);
   vdp2_scrn_display_set(VDP2_SCRN_DISPTP_NBG0);
-  vdp2_scrn_scroll_y_set(VDP2_SCRN_NBG0, FIX16(16));
 
-  const vdp2_vram_cycp_t vram_cycp = { .pt[0].t0 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+  const vdp2_vram_cycp_t vram_cycp = {
+    .pt[0].t0 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
     .pt[0].t1 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
     .pt[0].t2 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
     .pt[0].t3 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
-    .pt[0].t4 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[0].t5 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[0].t6 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[0].t7 = VDP2_VRAM_CYCP_NO_ACCESS,
+    .pt[0].t4 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[0].t5 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[0].t6 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[0].t7 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
 
     .pt[1].t0 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
     .pt[1].t1 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
     .pt[1].t2 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
     .pt[1].t3 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
-    .pt[1].t4 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[1].t5 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[1].t6 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[1].t7 = VDP2_VRAM_CYCP_NO_ACCESS,
+    .pt[1].t4 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[1].t5 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[1].t6 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[1].t7 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
 
-    .pt[2].t0 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[2].t1 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[2].t2 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[2].t3 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[2].t4 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[2].t5 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[2].t6 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[2].t7 = VDP2_VRAM_CYCP_NO_ACCESS,
+    .pt[2].t0 = VDP2_VRAM_CYCP_VCSTDR_NBG0,
+    .pt[2].t1 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[2].t2 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[2].t3 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[2].t4 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[2].t5 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[2].t6 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[2].t7 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
 
-    .pt[3].t0 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[3].t1 = VDP2_VRAM_CYCP_NO_ACCESS,
-    .pt[3].t2 = VDP2_VRAM_CYCP_NO_ACCESS,
+    .pt[3].t0 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[3].t1 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
+    .pt[3].t2 = VDP2_VRAM_CYCP_CHPNDR_NBG0,
     .pt[3].t3 = VDP2_VRAM_CYCP_NO_ACCESS,
     .pt[3].t4 = VDP2_VRAM_CYCP_NO_ACCESS,
     .pt[3].t5 = VDP2_VRAM_CYCP_NO_ACCESS,
@@ -134,6 +145,53 @@ void user_init(void) {
     .pt[3].t7 = VDP2_VRAM_CYCP_NO_ACCESS };
 
   vdp2_vram_cycp_set(&vram_cycp);
+
+  #define NBG0_LINE_SCROLL VDP2_VRAM_ADDR(2, 0x00000)
+  #define NBG0_VCS VDP2_VRAM_ADDR(2, 0x10000)
+
+  const vdp2_scrn_ls_format_t ls_format = {
+    .scroll_screen = VDP2_SCRN_NBG0,
+    .table_base = NBG0_LINE_SCROLL,
+    .interval = 0,
+    .type = VDP2_SCRN_LS_TYPE_HORZ | VDP2_SCRN_LS_TYPE_VERT
+  };
+
+  vdp2_scrn_ls_set(&ls_format);
+
+  const vdp2_scrn_vcs_format_t vcs_format = {
+    .scroll_screen = VDP2_SCRN_NBG0,
+    .table_base = NBG0_VCS
+  };
+
+  vdp2_scrn_vcs_set(&vcs_format);
+
+  volatile uint32_t* horizontalCoordinates = (volatile uint32_t*) NBG0_LINE_SCROLL;
+  const uint32_t scrollMask = 0x01ff0000; // Integer part
+  for (volatile uint32_t n = 0; n < 240; ++n)
+  {
+    // Horizontal screen scroll value. This will be (value % 320) * 0xFFFF
+    const uint32_t horizontalSize = 320;
+    horizontalCoordinates[n * 2 + 0] = (65536 * horizontalSize * n) & scrollMask;
+
+    // Vertical screen scroll value
+    uint32_t iPortion = (128 * horizontalSize * n) & scrollMask;
+    uint32_t aN = 64 * ((iPortion / 65536) + 1);
+    uint32_t bN = (horizontalSize / 8) * (n + 1);
+    uint32_t bNN = (horizontalSize / 8) * n;
+    uint32_t m = aN >= bN ? 64 : aN - bNN;
+    horizontalCoordinates[n * 2 + 1] = iPortion + (1024 * (64 - m));
+  }
+  
+  volatile uint32_t* verticalCoordinates = (volatile uint32_t*) NBG0_VCS;
+  for (volatile uint32_t n = 0; n < 256; ++n)
+  {
+    // cell is 8x8 so in 320 we have 40 cells
+    const uint32_t numCells = 64;
+    for (volatile uint32_t cellW = 0; cellW < numCells; ++cellW) {
+      const uint32_t cellScrollValue = 1024 * cellW;
+      verticalCoordinates[n * numCells + cellW] = cellScrollValue;
+    }
+  }
 
   vdp2_tvmd_display_res_set(VDP2_TVMD_INTERLACE_NONE, VDP2_TVMD_HORZ_NORMAL_A,
     VDP2_TVMD_VERT_240);
@@ -147,14 +205,12 @@ void user_init(void) {
   cpu_frt_init(CPU_FRT_CLOCK_DIV_128);
 
   dbgio_init();
-  dbgio_dev_default_init(DBGIO_DEV_VDP2_ASYNC);
+  dbgio_dev_default_init(DBGIO_DEV_VDP2);
   dbgio_dev_font_load();
 
   vdp2_tvmd_display_set();
 
   smpc_peripheral_init();
-
-  initialize_film();
 }
 
 static void _vblank_in_handler(void *work __unused) {

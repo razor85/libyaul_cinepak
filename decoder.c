@@ -32,13 +32,11 @@ stripdata_t stripData;
 
 #define VIDEO_WIDTH 320
 #define VIDEO_HEIGHT 240
-#define VDP2_WIDTH 512
-#define VDP2_HEIGHT 256
 uint32_t videoWidth = VIDEO_WIDTH;
 uint32_t videoHeight = VIDEO_HEIGHT;
 uint32_t videoStartY = 0;
-uint16_t *vdp2DestinationBuffer = (uint16_t *)VDP2_VRAM_ADDR(0, 16 * VDP2_WIDTH);
-uint16_t videoTmpBuffer[VDP2_WIDTH * VDP2_HEIGHT];
+uint16_t *vdp2DestinationBuffer = (uint16_t *)VDP2_VRAM_ADDR(0, 0);
+uint16_t videoTmpBuffer[VIDEO_WIDTH * VIDEO_HEIGHT];
 uint16_t *vdp2ImagePtr = videoTmpBuffer;
 
 // Timer
@@ -441,8 +439,8 @@ void renderPixel1(stripdata_t *data, uint8_t c0) {
   const uint32_t y = data->writeY;
 
   // VDP2 image has 512x256
-  uint32_t imageIndex = ((videoStartY + y) * VDP2_WIDTH) + x;
-  DEBUG_REQUIRE_LT(imageIndex, VDP2_WIDTH * VDP2_HEIGHT);
+  uint32_t imageIndex = ((videoStartY + y) * VIDEO_WIDTH) + x;
+  DEBUG_REQUIRE_LT(imageIndex, VIDEO_WIDTH * VIDEO_HEIGHT);
 
   // +----+----+  +---+  +---+
   // | y0 | y1 |  | u |  | v |
@@ -459,21 +457,21 @@ void renderPixel1(stripdata_t *data, uint8_t c0) {
   if (y + 1 >= data->bottomY)
     return;
 
-  imageIndex += VDP2_WIDTH;
+  imageIndex += VIDEO_WIDTH;
   vdp2ImagePtr[imageIndex] = vdp2ImagePtr[imageIndex + 1] = e0.color[0];
   vdp2ImagePtr[imageIndex + 2] = vdp2ImagePtr[imageIndex + 3] = e0.color[1];
 
   if (y + 2 >= data->bottomY)
     return;
 
-  imageIndex += VDP2_WIDTH;
+  imageIndex += VIDEO_WIDTH;
   vdp2ImagePtr[imageIndex] = vdp2ImagePtr[imageIndex + 1] = e0.color[2];
   vdp2ImagePtr[imageIndex + 2] = vdp2ImagePtr[imageIndex + 3] = e0.color[3];
 
   if (y + 3 >= data->bottomY)
     return;
 
-  imageIndex += VDP2_WIDTH;
+  imageIndex += VIDEO_WIDTH;
   vdp2ImagePtr[imageIndex] = vdp2ImagePtr[imageIndex + 1] = e0.color[2];
   vdp2ImagePtr[imageIndex + 2] = vdp2ImagePtr[imageIndex + 3] = e0.color[3];
 }
@@ -490,8 +488,8 @@ void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
   const uint32_t x = data->writeX;
   const uint32_t y = data->writeY;
 
-  uint32_t imageIndex = ((videoStartY + y) * VDP2_WIDTH) + x;
-  DEBUG_REQUIRE_LT(imageIndex, VDP2_WIDTH * VDP2_HEIGHT);
+  uint32_t imageIndex = ((videoStartY + y) * VIDEO_WIDTH) + x;
+  DEBUG_REQUIRE_LT(imageIndex, VIDEO_WIDTH * VIDEO_HEIGHT);
 
   // +------+------+------+------+
   // | e0y0 | e0y1 | e1y0 | e1y1 |
@@ -513,7 +511,7 @@ void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
   if (y + 1 >= data->bottomY)
     return;
 
-  imageIndex += VDP2_WIDTH - 3;
+  imageIndex += VIDEO_WIDTH - 3;
   vdp2ImagePtr[imageIndex++] = e0->color[2];
   vdp2ImagePtr[imageIndex++] = e0->color[3];
   vdp2ImagePtr[imageIndex++] = e1->color[2];
@@ -522,7 +520,7 @@ void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
   if (y + 2 >= data->bottomY)
     return;
 
-  imageIndex += VDP2_WIDTH - 3;
+  imageIndex += VIDEO_WIDTH - 3;
   vdp2ImagePtr[imageIndex++] = e2->color[0];
   vdp2ImagePtr[imageIndex++] = e2->color[1];
   vdp2ImagePtr[imageIndex++] = e3->color[0];
@@ -531,7 +529,7 @@ void renderPixel4(stripdata_t *data, uint8_t c0, uint8_t c1, uint8_t c2,
   if (y + 3 >= data->bottomY)
     return;
 
-  imageIndex += VDP2_WIDTH - 3;
+  imageIndex += VIDEO_WIDTH - 3;
   vdp2ImagePtr[imageIndex++] = e2->color[2];
   vdp2ImagePtr[imageIndex++] = e2->color[3];
   vdp2ImagePtr[imageIndex++] = e3->color[2];
@@ -814,7 +812,7 @@ void readChunk(uint16_t chunkID, uint16_t chunkDataLength,
     {
       const uint32_t chunkIdPos = stream_pos(stream) - 4;
 
-      memset(vdp2ImagePtr, 0, VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
+      memset(vdp2ImagePtr, 0, VIDEO_WIDTH * VIDEO_HEIGHT * sizeof(uint16_t));
       logMessage("Unknown chunk id 0x%X at offset %d\n", chunkID, chunkIdPos);
       sprintf((char *)LWRAM(80), "Unknown chunk id 0x%X at offset %d\n",
         chunkID, chunkIdPos);
@@ -913,7 +911,12 @@ inline void parseSample(const film_sample_t *sample, binary_stream_t *stream) {
 }
 
 void initialize_film() {
-  memset(vdp2ImagePtr, 0, VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
+  memset(vdp2ImagePtr, 0, VIDEO_WIDTH * VIDEO_HEIGHT * sizeof(uint16_t));
+  vdp_dma_enqueue(vdp2DestinationBuffer, vdp2ImagePtr,
+    VIDEO_WIDTH * VIDEO_HEIGHT * sizeof(uint16_t));
+
+  vdp2_sync();
+  vdp2_sync_wait();
 }
 
 void film_vblank() {
@@ -1005,14 +1008,20 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
   uint32_t samplesInSecCount = 0;
   uint32_t bytesInSecCount = 0;
   uint32_t lastBytesInSecCount = 0;
+  uint32_t playTime = 0;
 
   for (uint32_t sampleId = 0; sampleId < numSamples; ++sampleId) {
+    if (!film_loop_handler()) {
+      break;
+    }
+
     uint32_t timeEllapsed = frtTimerEllapsed();
     if (timeEllapsed >= 1000) {
       samplesInSec = samplesInSecCount;
       if (samplesInSec < minSamplesInSec)
         minSamplesInSec = samplesInSec;
 
+      playTime += 1;
       samplesInSecCount = 0;
       lastBytesInSecCount = bytesInSecCount;
       bytesInSecCount = 0;
@@ -1026,16 +1035,15 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
 
     if (film_sample_is_video(&sample)) {
       vdp_dma_enqueue(vdp2DestinationBuffer, vdp2ImagePtr,
-        VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
+        VIDEO_WIDTH * VIDEO_HEIGHT * sizeof(uint16_t));
     }
 
     clearLog();
-    logMessage("\n\nFrame %d\nSamplesInSec: %d\nBytesInSec: %d\nLastBytesInSec: %d\n", sampleId,
-      samplesInSec, bytesInSecCount, lastBytesInSecCount);
+    logMessage("\nPlay time: %ds\nFrame %d\nSamplesInSec: %d\nBytesInSec: "
+               "%d\nLastBytesInSec: %d\n",
+      playTime, sampleId, samplesInSec, bytesInSecCount, lastBytesInSecCount);
   }
   
   const int status __unused = cd_block_cmd_data_transfer_end();
   DEBUG_REQUIRE_EQ(status, 0);
-
-  memset(vdp2ImagePtr, 0, VDP2_WIDTH * VDP2_HEIGHT * sizeof(uint16_t));
 }
