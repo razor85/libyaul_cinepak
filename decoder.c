@@ -1,3 +1,4 @@
+#include "cd.h"
 #include "decoder.h"
 
 #ifndef MIN
@@ -9,23 +10,6 @@
 #endif
 
 #define CAST_DATA16(X) (volatile uint16_t*)(X)
-
-inline void clearLog() { dbgio_printf("[H[2J"); }
-
-#define logError(__FMT__, ...)                                                                     \
-  do {                                                                                             \
-    clearLog();                                                                                    \
-    dbgio_printf(__FMT__, __VA_ARGS__);                                                            \
-    dbgio_flush();                                                                                 \
-    vdp2_sync();                                                                                   \
-    vdp2_sync_wait();                                                                              \
-  } while (true)
-
-#define logMessage(__FMT__, ...)                                                                   \
-  do {                                                                                             \
-    dbgio_printf(__FMT__, __VA_ARGS__);                                                            \
-    dbgio_flush();                                                                                 \
-  } while (false)
 
 // Globals
 stripdata_t stripData;
@@ -47,16 +31,6 @@ const uint32_t frtTimerDiv = CPU_FRT_NTSC_320_128_COUNT_1MS;
 #define TMP_BUFFER_SIZE 0xFFFF
 uint8_t tmpBuffer[0xFFFF];
 
-#define HIRQ 0x0008UL
-#define DRDY 0x0002 /* Data transfer preparations complete */
-#define EHST 0x0080 /* Host I/O processing complete */
-
-// Read 4 bytes from register
-#define CD_BLOCK_DATA_4 0x25818000UL
-
-// Read 2 bytes from register
-#define CD_BLOCK_DATA_2 0x25890000UL
-
 uint16_t stream_read16(binary_stream_t *);
 uint32_t stream_read32(binary_stream_t *);
 uint32_t stream_pos(binary_stream_t *stream);
@@ -73,68 +47,6 @@ static void frtTimerStart(uint16_t count) {
 static uint32_t frtTimerEllapsed() {
   uint32_t ticks = (0xFFFF * frtOverflowCount) + cpu_frt_count_get();
   return ticks / frtTimerDiv;
-}
-
-void waitForCD() {
-  cd_block_status_t status;
-  while (true) {
-    while (cd_block_busy()) {
-      cpu_instr_nop();
-    }
-
-    const int lastStatus = cd_block_cmd_status_get(&status);
-    if (lastStatus == 0) {
-      DEBUG_REQUIRE_NE(status.cd_status, CD_STATUS_ERROR);
-      DEBUG_REQUIRE_NE(status.cd_status, CD_STATUS_FATAL);
-
-      if (status.cd_status == CD_STATUS_PAUSE ||
-        status.cd_status == CD_STATUS_STANDBY) {
-        break;
-      }
-
-    } else {
-      logMessage("\nFailed to get cd block status: %d\n", lastStatus);
-    }
-
-    // Can't issue too many commands at once so...
-    for (volatile uint32_t i = 0; i < 0xFFFF; ++i) {
-      cpu_instr_nop();
-    }
-  }
-}
-
-inline uint32_t numSectorsForSize(uint32_t size) {
-  // Past size so we get the complete number of sectors for the whole data.
-  return (size + (CDFS_SECTOR_SIZE - 1)) / CDFS_SECTOR_SIZE;
-}
-
-void queueDiskRead(uint32_t fad, uint32_t size) {
-  DEBUG_REQUIRE_NE(size, 0);
-  DEBUG_REQUIRE_EQ(size % 4, 0);
-  waitForCD();
-
-  int status __unused = cd_block_cmd_selector_reset(0, 0);
-  DEBUG_REQUIRE_EQ(status, 0);
-
-  status = cd_block_cmd_cd_dev_connection_set(0);
-  DEBUG_REQUIRE_EQ(status, 0);
-
-  status = cd_block_cmd_disk_play(0, fad, numSectorsForSize(size));
-  DEBUG_REQUIRE_EQ(status, 0);
-}
-
-static uint32_t getSectorsReady(uint32_t wantSectors) {
-  uint32_t sectorsReady;
-  while (true) {
-    sectorsReady = cd_block_cmd_sector_number_get(0);
-    if (sectorsReady >= wantSectors) {
-      break;
-    } else {
-      for (volatile uint32_t i = 0; i < 1024; ++i) { cpu_instr_nop(); }
-    }
-  }
-
-  return sectorsReady;
 }
 
 inline void codebook_new(codebook_t *cb, binary_stream_t *stream) {
@@ -293,16 +205,7 @@ void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
   int status __unused = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
   DEBUG_REQUIRE_EQ(status, 0);
 
-  // Wait until data is available
-  bool ready __unused = false;
-  for (volatile uint32_t i = 0; i < 240000; ++i) {
-    if (MEMORY_READ(16, CD_BLOCK(HIRQ)) & DRDY) {
-      ready = true;
-      break;
-    }
-  }
-
-  DEBUG_REQUIRE(ready);
+  waitUntilCdDataIsAvailable();
 
   stream->dataAvailable = sectorsReady * CDFS_SECTOR_SIZE;
   stream->remainingSectors -= sectorsReady;
@@ -904,7 +807,13 @@ void parseVideo(binary_stream_t *stream) {
 
 inline void parseSample(const film_sample_t *sample, binary_stream_t *stream) {
   if (film_sample_is_audio(sample)) {
-    stream_skip(stream, sample->length);
+    uint32_t *nextAudioBuffer = film_get_next_audio_buffer(sample->length);
+    if (nextAudioBuffer != NULL) {
+      stream_readbytes(stream, CAST_DATA16(nextAudioBuffer), sample->length);
+      film_play_audio(sample->length);
+    } else {
+      stream_skip(stream, sample->length);
+    }
   } else {
     parseVideo(stream);
   }
@@ -966,6 +875,9 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
   const uint8_t audioSamplingResolution = (ABCD >> 8) & 0xFF;
   const uint8_t audioCompression = ABCD & 0xFF;
   const uint16_t audioSamplingFrequencyHz = stream_read16(&stream);
+
+  film_audio_setup(audioSamplingFrequencyHz, audioChannels,
+    audioSamplingResolution);
 
   logMessage("Found %dx%d@%dbpp video\n", videoWidth, videoHeight, videoBPP);
   logMessage("Centering at y = %d\n", videoStartY);

@@ -9,7 +9,7 @@
 
 extern void satAssert(const char *filename, int line, const char *msg);
 
-// #define HAS_DEBUG_REQUIRE_FUNCTIONS
+#define HAS_DEBUG_REQUIRE_FUNCTIONS
 #ifdef HAS_DEBUG_REQUIRE_FUNCTIONS
 #define __STRINGIFY(x) #x
 #define __TOSTRING(x) __STRINGIFY(x)
@@ -52,5 +52,22 @@ extern void satAssert(const char *filename, int line, const char *msg);
     vdp2_sync();                                                               \
     vdp2_sync_wait();                                                          \
   }
+
+#define logError(__FMT__, ...)                                                                     \
+  do {                                                                                             \
+    clearLog();                                                                                    \
+    dbgio_printf(__FMT__, __VA_ARGS__);                                                            \
+    dbgio_flush();                                                                                 \
+    vdp2_sync();                                                                                   \
+    vdp2_sync_wait();                                                                              \
+  } while (true)
+
+#define logMessage(__FMT__, ...)                                                                   \
+  do {                                                                                             \
+    dbgio_printf(__FMT__, __VA_ARGS__);                                                            \
+    dbgio_flush();                                                                                 \
+  } while (false)
+
+static __unused void clearLog() { dbgio_printf("[H[2J"); }
 
 #endif // BASE_H

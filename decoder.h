@@ -87,6 +87,12 @@ typedef struct {
 
 extern void initialize_film();
 
+extern uint32_t* film_get_next_audio_buffer(uint32_t length);
+
+extern void film_play_audio(uint32_t bufferLength);
+
+extern void film_audio_setup(uint32_t frequency, uint32_t numChannels, uint32_t sampleResolution);
+
 // Return 0 to stop film playback
 extern int film_loop_handler();
 

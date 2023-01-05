@@ -1,5 +1,8 @@
 #include "base.h"
+#include "cd.h"
 #include "decoder.h"
+
+#include "pcmsys.h"
 
 static void _vblank_in_handler(void *work __unused);
 
@@ -9,10 +12,10 @@ static smpc_peripheral_digital_t pad0;
 
 static cdfs_filelist_t filelist;
 
+#define MOVIE_LIST_ENTRIES 40
+
 #define SAMPLE_CACHE_SIZE 20000
 static film_sample_t sampleCache[SAMPLE_CACHE_SIZE];
-
-void clearLog() { dbgio_printf("[H[2J"); }
 
 int film_loop_handler() {
   smpc_peripheral_process();
@@ -24,6 +27,55 @@ int film_loop_handler() {
   }
 }
 
+uint32_t soundFrequency = 0;
+uint32_t soundChannels = 0;
+uint32_t soundResolution = 0;
+cdfs_filelist_entry_t *soundDriverEntry = NULL;
+const char* soundDriverName = "SNDDRV.BIN";
+volatile uint16_t soundDriverData[8192] = { 0 };
+
+uint32_t *film_get_next_audio_buffer(uint32_t length) {
+  return pcmStreamEnqueue(soundResolution, length, soundFrequency);
+}
+
+void film_play_audio(uint32_t bufferLength) {
+  pcmStreamPlay(7);
+}
+
+void film_audio_setup(uint32_t frequency, uint32_t numChannels, uint32_t sampleResolution) {
+  soundFrequency = frequency;
+  soundChannels = numChannels;
+  soundResolution = sampleResolution;
+}
+  
+void loadSoundDriver() {
+  DEBUG_REQUIRE_NE(soundDriverEntry, NULL);
+  queueDiskRead(soundDriverEntry->starting_fad, soundDriverEntry->size);
+
+  const uint32_t sectorsReady = getSectorsReady(
+    numSectorsForSize(soundDriverEntry->size));
+
+  DEBUG_REQUIRE_GT(sectorsReady, 0);
+
+  int status __unused = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
+  DEBUG_REQUIRE_EQ(status, 0);
+
+  waitUntilCdDataIsAvailable();
+  
+  volatile uint16_t *cdData = (volatile uint16_t *)CD_BLOCK_DATA_2;
+
+  const uint32_t dataForReading = soundDriverEntry->size >> 1;
+  for (volatile uint32_t i = 0; i < dataForReading; ++i) {
+    soundDriverData[i] = *cdData;
+  }
+
+  status = cd_block_cmd_data_transfer_end();
+  DEBUG_REQUIRE_EQ(status, 0);
+
+  pcmsys_load_driver((void*)soundDriverData, soundDriverEntry->size);
+  pcmStreamInitialize();
+}
+
 int main() {
   cdfs_filelist_entry_t *const filelist_entries = cdfs_entries_alloc(-1);
   DEBUG_REQUIRE(filelist_entries != NULL);
@@ -31,18 +83,27 @@ int main() {
   cdfs_filelist_default_init(&filelist, filelist_entries, -1);
   cdfs_filelist_root_read(&filelist);
 
-  cdfs_filelist_entry_t *movieEntries[20];
-  memset(movieEntries, 0, sizeof(cdfs_filelist_entry_t*) * 20);
+  cdfs_filelist_entry_t *movieEntries[MOVIE_LIST_ENTRIES];
+  memset(movieEntries, 0, sizeof(cdfs_filelist_entry_t*) * MOVIE_LIST_ENTRIES);
+
+  const uint32_t soundDriverNameLen = strlen(soundDriverName);
 
   uint32_t numMovieEntries = 0;
   for (uint32_t i = 0; i < filelist.entries_count; ++i) {
     const char* name = filelist.entries[i].name;
     uint32_t nameLen = strlen(name);
 
-    if (strcmp(".CPK", &name[nameLen - 4]) == 0)
+    if (soundDriverEntry == NULL &&
+      strncmp(soundDriverName, name, soundDriverNameLen) == 0) {
+
+      soundDriverEntry = &filelist.entries[i];
+    } else if (strcmp(".CPK", &name[nameLen - 4]) == 0) {
       movieEntries[numMovieEntries++] = &filelist.entries[i];
+    }
   }
-    
+
+  loadSoundDriver();
+
   uint32_t menuSelection = 0;
   bool movieSelected = false;
 
@@ -213,8 +274,7 @@ void user_init(void) {
   smpc_peripheral_init();
 }
 
-static void _vblank_in_handler(void *work __unused) {
-}
+static void _vblank_in_handler(void *work __unused) { sdrv_vblank_rq(); }
 
 static void _vblank_out_handler(void *work __unused) {
   smpc_peripheral_intback_issue();

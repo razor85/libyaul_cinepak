@@ -8,7 +8,8 @@ SH_PROGRAM:= cinepak_player
 SH_SRCS :=   \
   base.c     \
   decoder.c  \
-  main.c
+  main.c     \
+  pcmsys.c
 
 SH_LIBRARIES:=
 SH_CFLAGS+= -I. -O2 -g -Wall
