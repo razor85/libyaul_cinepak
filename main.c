@@ -38,7 +38,7 @@ uint32_t *film_get_next_audio_buffer(uint32_t length) {
   return pcmStreamEnqueue(soundResolution, length, soundFrequency);
 }
 
-void film_play_audio(uint32_t bufferLength) {
+void film_play_audio(uint32_t bufferLength __unused) {
   pcmStreamPlay(7);
 }
 
@@ -46,6 +46,7 @@ void film_audio_setup(uint32_t frequency, uint32_t numChannels, uint32_t sampleR
   soundFrequency = frequency;
   soundChannels = numChannels;
   soundResolution = sampleResolution;
+  setSlotSampleSize(soundFrequency);
 }
   
 void loadSoundDriver() {

@@ -165,8 +165,14 @@ short convert_bitrate_to_pitchword(short sampleRate) {
   return PCM_SET_PITCH_WORD(octr, fnsr);
 }
 
+uint32_t slotSampleSize = 22050;
+
+void setSlotSampleSize(uint32_t length) {
+  slotSampleSize = length;
+}
+
 uint32_t getSlotAddressOffset(uint32_t slot) {
-  return (uint32_t) (scsp_load_start_address + slot * 44100);
+  return (uint32_t) (scsp_load_start_address + slot * slotSampleSize);
 }
 
 uint32_t *getSlotAddress(uint32_t slot) {
@@ -229,7 +235,7 @@ void pcmsys_load_8bit_pcm_slot(uint32_t length, int sampleRate, uint32_t slot) {
 #define MAX_PCM_STREAM_BUFFERS 6
 
 typedef struct {
-  uint8_t isUsed;
+  int16_t isUsed;
   int16_t pcmIndex;
   uint32_t size;
 } pcm_stream_buffer;
@@ -242,15 +248,25 @@ typedef struct {
   pcm_stream_buffer* currentPlayingBufferPtr;
   int8_t currentPlayingBuffer;
   uint8_t volume;
+  int8_t controlType;
   bool isPlaying;
 } pcm_stream;
 
 pcm_stream pcmStream;
 
-void pcmStreamInitialize() {
-  memset(&pcmStream, 0, sizeof(pcm_stream));
+void pcmStreamClear() {
+  pcmStream.pendingBlanks = 0;
+  pcmStream.nextPossibleFreeBuffer = 0;
+  memset(pcmStream.buffers, 0, sizeof(pcm_stream_buffer) * MAX_PCM_STREAM_BUFFERS);
+  pcmStream.currentPlayingBufferPtr = NULL;
   pcmStream.currentPlayingBuffer = -1;
+  pcmStream.volume = 0;
+  pcmStream.controlType = PCM_PROTECTED;
   pcmStream.isPlaying = false;
+}
+
+void pcmStreamInitialize() {
+  pcmStreamClear();
 }
 
 uint32_t *pcmStreamEnqueue(uint8_t numBits, uint32_t length,
@@ -263,18 +279,18 @@ uint32_t *pcmStreamEnqueue(uint8_t numBits, uint32_t length,
     return NULL;
   }
 
+  nextBuffer->isUsed = true;
   nextBuffer->pcmIndex = pcmStream.nextPossibleFreeBuffer++;
   if (pcmStream.nextPossibleFreeBuffer >= MAX_PCM_STREAM_BUFFERS) {
     pcmStream.nextPossibleFreeBuffer = 0;
   }
 
-  nextBuffer->isUsed = true;
-  nextBuffer->size = length;
-
   if (numBits == 8) {
     pcmsys_load_8bit_pcm_slot(length, sampleRate, nextBuffer->pcmIndex);
+    nextBuffer->size = length;
   } else {
     pcmsys_load_16bit_pcm_slot(length, sampleRate, nextBuffer->pcmIndex);
+    nextBuffer->size = length >> 1;
   }
 
   return getSlotAddress(nextBuffer->pcmIndex);
@@ -294,14 +310,8 @@ void pcmStreamPlay(uint8_t volume) {
     pcmStream.pendingBlanks = nextBuffer->size /
       m68k_com->pcmCtrl[nextBuffer->pcmIndex].bytes_per_blank;
 
-    pcm_play(nextBuffer->pcmIndex, 0, volume);
+    pcm_play(nextBuffer->pcmIndex, pcmStream.controlType, volume);
   }
-}
-
-void pcmStreamClear() {
-  memset(&pcmStream, 0, sizeof(pcm_stream));
-  pcmStream.isPlaying = false;
-  pcmStream.currentPlayingBuffer = -1;
 }
 
 void pcmStreamStop() {
@@ -320,6 +330,7 @@ void sdrv_vblank_rq(void) {
       pcmStream.currentPlayingBufferPtr->size = 0;
 
       pcmStream.currentPlayingBuffer++;
+      pcmStream.currentPlayingBuffer = 0;
       if (pcmStream.currentPlayingBuffer >= MAX_PCM_STREAM_BUFFERS) {
         pcmStream.currentPlayingBuffer = 0;
       }
@@ -333,7 +344,7 @@ void sdrv_vblank_rq(void) {
         pcmStream.pendingBlanks = nextBuffer->size /
           m68k_com->pcmCtrl[nextBuffer->pcmIndex].bytes_per_blank;
 
-        pcm_play(nextBuffer->pcmIndex, 0, pcmStream.volume);
+        pcm_play(nextBuffer->pcmIndex, pcmStream.controlType, pcmStream.volume);
       } else {
         pcmStreamClear();
       }
@@ -341,4 +352,14 @@ void sdrv_vblank_rq(void) {
   }
 
   m68k_com->start = 1;
+}
+
+int32_t pcmStreamGetCurrPlay() {
+  if (pcmStream.isPlaying) {
+    // return m68k_com->pcmCtrl[pcmStream.currentPlayingBufferPtr->pcmIndex]
+    //   .playsize;
+    return pcmStream.currentPlayingBufferPtr->pcmIndex;
+  } else {
+    return -1;
+  }
 }

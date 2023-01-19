@@ -48,6 +48,10 @@ typedef struct {
   
   film_sample_cache_t sampleCache;
   
+  uint8_t audioChannels;
+  uint8_t audioSamplingResolution;
+  uint16_t audioSamplingFrequency;
+  
   bool eof;
 
 } binary_stream_t;

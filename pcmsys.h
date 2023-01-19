@@ -175,6 +175,8 @@ void smpc_issue_command(unsigned char cmd);
 //
 //
 
+void setSlotSampleSize(uint32_t length);
+
 uint32_t *getSlotAddress(uint32_t slot);
 
 void pcmsys_load_16bit_pcm_slot(uint32_t length, int sample_rate,
@@ -195,5 +197,7 @@ uint32_t *pcmStreamEnqueue(uint8_t numBits, uint32_t length,
   uint32_t sampleRate);
 void pcmStreamPlay(uint8_t volume);
 void pcmStreamStop();
+
+int32_t pcmStreamGetCurrPlay();
 
 #endif

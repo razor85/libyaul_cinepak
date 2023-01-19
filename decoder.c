@@ -1,5 +1,6 @@
 #include "cd.h"
 #include "decoder.h"
+#include "pcmsys.h"
 
 #ifndef MIN
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
@@ -22,6 +23,12 @@ uint32_t videoStartY = 0;
 uint16_t *vdp2DestinationBuffer = (uint16_t *)VDP2_VRAM_ADDR(0, 0);
 uint16_t videoTmpBuffer[VIDEO_WIDTH * VIDEO_HEIGHT];
 uint16_t *vdp2ImagePtr = videoTmpBuffer;
+  
+// Audio data
+uint8_t audioChannels = 0;
+uint8_t audioSamplingResolution = 0;
+uint8_t audioCompression = 0;
+uint16_t audioSamplingFrequencyHz = 0;
 
 // Timer
 uint16_t frtOverflowCount = 0;
@@ -807,10 +814,16 @@ void parseVideo(binary_stream_t *stream) {
 
 inline void parseSample(const film_sample_t *sample, binary_stream_t *stream) {
   if (film_sample_is_audio(sample)) {
-    uint32_t *nextAudioBuffer = film_get_next_audio_buffer(sample->length);
+    uint32_t length = sample->length;
+    if (stream->audioChannels == 2) {
+      length >>= 1;
+      stream_skip(stream, length);
+    }
+
+    uint32_t *nextAudioBuffer = film_get_next_audio_buffer(length);
     if (nextAudioBuffer != NULL) {
-      stream_readbytes(stream, CAST_DATA16(nextAudioBuffer), sample->length);
-      film_play_audio(sample->length);
+      stream_readbytes(stream, CAST_DATA16(nextAudioBuffer), length);
+      film_play_audio(length);
     } else {
       stream_skip(stream, sample->length);
     }
@@ -950,8 +963,10 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
 
     clearLog();
     logMessage("\nPlay time: %ds\nFrame %d\nSamplesInSec: %d\nBytesInSec: "
-               "%d\nLastBytesInSec: %d\n",
-      playTime, sampleId, samplesInSec, bytesInSecCount, lastBytesInSecCount);
+               "%d\nLastBytesInSec: %d\nAudio: %c/%d bits/%d Hz/ Comp: %d",
+      playTime, sampleId, samplesInSec, bytesInSecCount, lastBytesInSecCount,
+      audioChannels == 1 ? 'M' : 'S', audioSamplingResolution,
+      audioSamplingFrequencyHz, audioCompression);
   }
   
   const int status __unused = cd_block_cmd_data_transfer_end();
