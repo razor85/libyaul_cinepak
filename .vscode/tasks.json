@@ -17,6 +17,10 @@
       "group": {
         "kind": "build",
         "isDefault": true
+      },
+      "presentation": {
+        "showReuseMessage": false,
+        "clear": true
       }
     },
     {
@@ -34,6 +38,10 @@
       "group": {
         "kind": "build",
         "isDefault": false
+      },
+      "presentation": {
+        "showReuseMessage": false,
+        "clear": true
       }
     },
     {
@@ -51,6 +59,10 @@
       "group": {
         "kind": "build",
         "isDefault": false
+      },
+      "presentation": {
+        "showReuseMessage": false,
+        "clear": true
       }
     },
     {
@@ -59,6 +71,9 @@
       "command": "d:/emulation/saturn/Mednafen/mednafen.exe",
       "args": [
         "${workspaceFolder}\\cinepak_player.cue"
+      ],
+      "dependsOn": [
+        "MSYS64 Saturn Make Folder"
       ],
       "group": {
         "kind": "test",
@@ -73,6 +88,25 @@
       "command": "d:/emulation/saturn/yabause-0.9.15-win64/yabause.exe",
       "args": [
         "${workspaceFolder}\\cinepak_player.cue"
+      ],
+      "dependsOn": [
+        "MSYS64 Saturn Make Folder"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      },
+      "isBackground": true
+    },
+    {
+      "label": "Run on Saturn via USB",
+      "type": "process",
+      "command": "C:/Desenvolvimento/SegaSaturn/msys64/home/abra1/libyaul_cinepak/usb_dev_tool/usb_dev_tool.exe",
+      "args": [
+        "${workspaceFolder}\\build\\cinepak_player.bin"
+      ],
+      "dependsOn": [
+        "MSYS64 Saturn Make Folder"
       ],
       "group": {
         "kind": "test",
