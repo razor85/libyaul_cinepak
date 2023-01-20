@@ -48,10 +48,6 @@ typedef struct {
   
   film_sample_cache_t sampleCache;
   
-  uint8_t audioChannels;
-  uint8_t audioSamplingResolution;
-  uint16_t audioSamplingFrequency;
-  
   bool eof;
 
 } binary_stream_t;
@@ -91,7 +87,11 @@ typedef struct {
 
 extern void initialize_film();
 
-extern uint32_t* film_get_next_audio_buffer(uint32_t length);
+extern uint32_t film_get_next_audio_buffer_size();
+
+extern uint32_t* film_get_next_audio_buffer_ptr(uint8_t slot);
+
+extern void film_notify_read_audio_buffer_bytes(uint32_t length);
 
 extern void film_play_audio(uint32_t bufferLength);
 

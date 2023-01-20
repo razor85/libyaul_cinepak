@@ -27,26 +27,62 @@ int film_loop_handler() {
   }
 }
 
-uint32_t soundFrequency = 0;
-uint32_t soundChannels = 0;
-uint32_t soundResolution = 0;
 cdfs_filelist_entry_t *soundDriverEntry = NULL;
 const char* soundDriverName = "SNDDRV.BIN";
 volatile uint16_t soundDriverData[8192] = { 0 };
 
-uint32_t *film_get_next_audio_buffer(uint32_t length) {
-  return pcmStreamEnqueue(soundResolution, length, soundFrequency);
+uint8_t *baseSoundMemory = NULL;
+uint8_t *soundMemory = NULL;
+uint8_t *soundMemoryLimit = NULL;
+
+uint32_t film_get_next_audio_buffer_size() {
+  return (uint32_t) (soundMemoryLimit - soundMemory);
+}
+
+uint32_t *film_get_next_audio_buffer_ptr(uint8_t slot) {
+  return (uint32_t *) soundMemory + (slot * getSlotSize());
+}
+
+void film_notify_read_audio_buffer_bytes(uint32_t length) {
+  soundMemory += length;
+  DEBUG_REQUIRE_LE(soundMemory, soundMemoryLimit);
+
+  if (soundMemory == soundMemoryLimit) {
+    soundMemory = baseSoundMemory;
+  }
 }
 
 void film_play_audio(uint32_t bufferLength __unused) {
-  pcmStreamPlay(7);
+  if (pcmStreamPlay(7)) {
+    vdp2_tvmd_vblank_in_wait();
+    vdp2_tvmd_vblank_out_wait();
+  }
 }
 
-void film_audio_setup(uint32_t frequency, uint32_t numChannels, uint32_t sampleResolution) {
-  soundFrequency = frequency;
-  soundChannels = numChannels;
-  soundResolution = sampleResolution;
-  setSlotSampleSize(soundFrequency);
+void film_audio_setup(uint32_t frequency, uint32_t channels, uint32_t numBits) {
+  DEBUG_REQUIRE_EQ(baseSoundMemory, NULL);
+  DEBUG_REQUIRE_EQ(soundMemory, NULL);
+  DEBUG_REQUIRE_EQ(soundMemoryLimit, NULL);
+
+  // TODO: Proper stereo
+  pcmStreamConfigure(channels == 2 ? 1 : 1, numBits, frequency);
+  baseSoundMemory = getSlotAddress(0);
+  soundMemory = baseSoundMemory;
+  soundMemoryLimit = baseSoundMemory + pcmStreamBufferSize(numBits);
+  if (film_get_next_audio_buffer_size() % 2) {
+    soundMemoryLimit--;
+  }
+
+  pcmStreamWarmUp();
+  sound_notify_driver();
+  vdp2_tvmd_vblank_in_wait();
+  vdp2_tvmd_vblank_out_wait();
+}
+
+void film_audio_reset() {
+  baseSoundMemory = NULL;
+  soundMemory = NULL;
+  soundMemoryLimit = NULL;
 }
   
 void loadSoundDriver() {
@@ -144,6 +180,10 @@ int main() {
       play_film(movieEntries[menuSelection], sampleCache, SAMPLE_CACHE_SIZE);
 
       movieSelected = false;
+
+      pcmStreamStop();
+      film_audio_reset();
+
       dbgio_dev_font_load();
     }
 
@@ -265,6 +305,7 @@ void user_init(void) {
   vdp_sync_vblank_out_set(_vblank_out_handler, NULL);
 
   cpu_frt_init(CPU_FRT_CLOCK_DIV_128);
+  cpu_frt_interrupt_priority_set(8);
 
   dbgio_init();
   dbgio_dev_default_init(DBGIO_DEV_VDP2);
@@ -273,9 +314,12 @@ void user_init(void) {
   vdp2_tvmd_display_set();
 
   smpc_peripheral_init();
+
+  // Improve performance by ignoring HBLANK IN
+  scu_ic_mask_chg(SCU_IC_MASK_ALL, SCU_IC_MASK_HBLANK_IN);
 }
 
-static void _vblank_in_handler(void *work __unused) { sdrv_vblank_rq(); }
+static void _vblank_in_handler(void *work __unused) { sound_notify_driver(); }
 
 static void _vblank_out_handler(void *work __unused) {
   smpc_peripheral_intback_issue();

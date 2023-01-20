@@ -11,24 +11,27 @@
 
 #include "pcmsys.h"
 
+// clang-format off
 static const int logtbl[] = {
-  /* 0 */ 0,
-  /* 1 */ 1,
-  /* 2 */ 2, 2,
-  /* 4 */ 3, 3, 3, 3,
-  /* 8 */ 4, 4, 4, 4, 4, 4, 4, 4,
-  /* 16 */ 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
-  /* 32 */ 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
-  6, 6, 6, 6, 6, 6, 6, 6, 6,
-  /* 64 */ 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-  /* 128 */ 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
-  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
-  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
-  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
-  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
-  8};
+  /* 0   */ 0,
+  /* 1   */ 1,
+  /* 2   */ 2, 2,
+  /* 4   */ 3, 3, 3, 3,
+  /* 8   */ 4, 4, 4, 4, 4, 4, 4, 4,
+  /* 16  */ 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+  /* 32  */ 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+  /* 64  */ 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+            7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+            7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+  /* 128 */ 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+            8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+            8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+            8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+            8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+            8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8
+};
+// clang-format on
 
 #define PCM_MSK1(a)  ((a) &0x0001)
 #define PCM_MSK3(a)  ((a) &0x0007)
@@ -72,15 +75,15 @@ void pcm_parameter_change(short pcmNumber, char volume, char pan) {
 }
 
 void pcm_cease(short pcmNumber) {
-  if (m68k_com->pcmCtrl[pcmNumber].loopType <=
-    0) // If it is a volatile or protected sound, the expected control method is
-       // to mute the sound and let it end itself.
-  {    // Protected sounds have a permission state of "until they end".
+  // If it is a volatile or protected sound, the expected control method is
+  // to mute the sound and let it end itself.
+  if (m68k_com->pcmCtrl[pcmNumber].loopType <= 0) {
+    // Protected sounds have a permission state of "until they end".
     m68k_com->pcmCtrl[pcmNumber].volume = 0;
   } else {
-    m68k_com->pcmCtrl[pcmNumber].sh2_permit =
-      0; // If it is a looping sound, the control method is to
-         // command it to stop.
+    // If it is a looping sound, the control method is to
+    // command it to stop.
+    m68k_com->pcmCtrl[pcmNumber].sh2_permit = 0;
   }
 }
 
@@ -165,19 +168,19 @@ short convert_bitrate_to_pitchword(short sampleRate) {
   return PCM_SET_PITCH_WORD(octr, fnsr);
 }
 
-uint32_t slotSampleSize = 22050;
-
-void setSlotSampleSize(uint32_t length) {
-  slotSampleSize = length;
-}
-
 uint32_t getSlotAddressOffset(uint32_t slot) {
-  return (uint32_t) (scsp_load_start_address + slot * slotSampleSize);
+  // Start past 64kb of the start of sound memory (to allow room for driver +
+  // needed data) and then use 64kb for each 'slot'
+  return (uint32_t) (0x10000 + slot * getSlotSize());
 }
 
-uint32_t *getSlotAddress(uint32_t slot) {
-  return (volatile uint32_t *) (getSlotAddressOffset(slot) + SNDRAM);
+uint8_t *getSlotAddress(uint32_t slot) {
+  return (uint8_t *) (getSlotAddressOffset(slot) + SNDRAM);
 }
+
+uint32_t getSlotSize() { return (64 * 1024); }
+
+uint32_t pcmStreamBufferSize(uint8_t bits) { return bits == 8 ? 44100 : 88200; }
 
 void pcmsys_load_16bit_pcm_slot(uint32_t length, int sampleRate,
   uint32_t slot) {
@@ -199,11 +202,10 @@ void pcmsys_load_16bit_pcm_slot(uint32_t length, int sampleRate,
   m68k_com->pcmCtrl[slot].pitchword = convert_bitrate_to_pitchword(sampleRate);
   m68k_com->pcmCtrl[slot].playsize = (length >> 1);
   m68k_com->pcmCtrl[slot].bytes_per_blank =
-    calculate_bytes_per_blank(sampleRate, false,
-      PCM_SYS_REGION);                               // Iniitalize as max volume
-  m68k_com->pcmCtrl[slot].bitDepth = PCM_TYPE_16BIT; // Select 16-bit
-  m68k_com->pcmCtrl[slot].loopType = 0; // Initialize as non-looping
-  m68k_com->pcmCtrl[slot].volume = 7;   // Initialize as max volume
+    calculate_bytes_per_blank(sampleRate, false, PCM_SYS_REGION);
+  m68k_com->pcmCtrl[slot].bitDepth = PCM_TYPE_16BIT;
+  m68k_com->pcmCtrl[slot].loopType = PCM_NO_LOOP;
+  m68k_com->pcmCtrl[slot].volume = PCM_MAX_VOLUME;
 }
 
 void pcmsys_load_8bit_pcm_slot(uint32_t length, int sampleRate, uint32_t slot) {
@@ -223,16 +225,15 @@ void pcmsys_load_8bit_pcm_slot(uint32_t length, int sampleRate, uint32_t slot) {
     (unsigned short) (destinationAddress & 0xFFFF);
 
   m68k_com->pcmCtrl[slot].pitchword = convert_bitrate_to_pitchword(sampleRate);
-  m68k_com->pcmCtrl[slot].playsize = (length);
+  m68k_com->pcmCtrl[slot].playsize = length;
   m68k_com->pcmCtrl[slot].bytes_per_blank =
-    calculate_bytes_per_blank(sampleRate, true,
-      PCM_SYS_REGION);                              // Iniitalize as max volume
-  m68k_com->pcmCtrl[slot].bitDepth = PCM_TYPE_8BIT; // Select 8-bit
-  m68k_com->pcmCtrl[slot].loopType = 0;             // Initialize as non-looping
-  m68k_com->pcmCtrl[slot].volume = 7;               // Iniitalize as max volume
+    calculate_bytes_per_blank(sampleRate, true, PCM_SYS_REGION);
+  m68k_com->pcmCtrl[slot].bitDepth = PCM_TYPE_8BIT;
+  m68k_com->pcmCtrl[slot].loopType = PCM_NO_LOOP;
+  m68k_com->pcmCtrl[slot].volume = PCM_MAX_VOLUME;
 }
 
-#define MAX_PCM_STREAM_BUFFERS 6
+#define MAX_PCM_STREAM_BUFFERS 2
 
 typedef struct {
   int16_t isUsed;
@@ -241,125 +242,91 @@ typedef struct {
 } pcm_stream_buffer;
 
 typedef struct {
-  // Number of vblanks until the current pcm ends
-  int32_t pendingBlanks;
-  int16_t nextPossibleFreeBuffer;
   pcm_stream_buffer buffers[MAX_PCM_STREAM_BUFFERS];
-  pcm_stream_buffer* currentPlayingBufferPtr;
-  int8_t currentPlayingBuffer;
   uint8_t volume;
   int8_t controlType;
+  bool isWarming;
   bool isPlaying;
 } pcm_stream;
 
 pcm_stream pcmStream;
 
 void pcmStreamClear() {
-  pcmStream.pendingBlanks = 0;
-  pcmStream.nextPossibleFreeBuffer = 0;
-  memset(pcmStream.buffers, 0, sizeof(pcm_stream_buffer) * MAX_PCM_STREAM_BUFFERS);
-  pcmStream.currentPlayingBufferPtr = NULL;
-  pcmStream.currentPlayingBuffer = -1;
+  memset(pcmStream.buffers, 0,
+    sizeof(pcm_stream_buffer) * MAX_PCM_STREAM_BUFFERS);
   pcmStream.volume = 0;
-  pcmStream.controlType = PCM_PROTECTED;
+  pcmStream.controlType = PCM_FWD_LOOP;
+  pcmStream.isWarming = false;
   pcmStream.isPlaying = false;
 }
 
-void pcmStreamInitialize() {
-  pcmStreamClear();
+void pcmStreamInitialize() { pcmStreamClear(); }
+
+void pcmStreamConfigure(uint8_t channels, uint8_t bits, uint32_t frequency) {
+  uint32_t bufferSize = pcmStreamBufferSize(bits);
+  for (uint32_t i = 0; i < channels; ++i) {
+    pcm_stream_buffer *nextBuffer = &pcmStream.buffers[i];
+    if (nextBuffer->isUsed) {
+      return NULL;
+    }
+
+    nextBuffer->isUsed = true;
+    nextBuffer->pcmIndex = i;
+
+    if (bits == 8) {
+      pcmsys_load_8bit_pcm_slot(bufferSize, frequency, nextBuffer->pcmIndex);
+    } else {
+      pcmsys_load_16bit_pcm_slot(bufferSize, frequency, nextBuffer->pcmIndex);
+    }
+  }
 }
 
-uint32_t *pcmStreamEnqueue(uint8_t numBits, uint32_t length,
-  uint32_t sampleRate) {
-
-  pcm_stream_buffer *nextBuffer =
-    &pcmStream.buffers[pcmStream.nextPossibleFreeBuffer];
-
-  if (nextBuffer->isUsed) {
-    return NULL;
-  }
-
-  nextBuffer->isUsed = true;
-  nextBuffer->pcmIndex = pcmStream.nextPossibleFreeBuffer++;
-  if (pcmStream.nextPossibleFreeBuffer >= MAX_PCM_STREAM_BUFFERS) {
-    pcmStream.nextPossibleFreeBuffer = 0;
-  }
-
-  if (numBits == 8) {
-    pcmsys_load_8bit_pcm_slot(length, sampleRate, nextBuffer->pcmIndex);
-    nextBuffer->size = length;
-  } else {
-    pcmsys_load_16bit_pcm_slot(length, sampleRate, nextBuffer->pcmIndex);
-    nextBuffer->size = length >> 1;
-  }
-
-  return getSlotAddress(nextBuffer->pcmIndex);
-}
-
-void pcmStreamPlay(uint8_t volume) {
-  if (pcmStream.isPlaying) {
+void pcmStreamWarmUp() {
+  if (pcmStream.isWarming || pcmStream.isPlaying) {
     return;
   }
 
-  pcm_stream_buffer* nextBuffer = &pcmStream.buffers[0];
-  if (nextBuffer->isUsed) {
-    pcmStream.currentPlayingBuffer = 0;
-    pcmStream.currentPlayingBufferPtr = nextBuffer;
-    pcmStream.isPlaying = true;
-    pcmStream.volume = volume;
-    pcmStream.pendingBlanks = nextBuffer->size /
-      m68k_com->pcmCtrl[nextBuffer->pcmIndex].bytes_per_blank;
-
-    pcm_play(nextBuffer->pcmIndex, pcmStream.controlType, volume);
+  for (uint32_t i = 0; i < MAX_PCM_STREAM_BUFFERS; ++i) {
+    pcm_play(i, pcmStream.controlType, 0);
   }
+    
+  pcmStream.isWarming = true;
 }
 
-void pcmStreamStop() {
+bool pcmStreamPlay(uint8_t volume) {
   if (pcmStream.isPlaying) {
-    pcm_cease(pcmStream.currentPlayingBufferPtr->pcmIndex);
-    pcmStreamClear();
+    return false;
   }
-}
 
-void sdrv_vblank_rq(void) {
-  if (pcmStream.isPlaying) {
-    pcmStream.pendingBlanks--;
-    if (pcmStream.pendingBlanks <= 0) {
-      pcmStream.currentPlayingBufferPtr->isUsed = false;
-      pcmStream.currentPlayingBufferPtr->pcmIndex = -1;
-      pcmStream.currentPlayingBufferPtr->size = 0;
+  if (pcmStream.isWarming) {
+    pcmStream.isWarming = false;
+    pcmStreamStop();
+  }
 
-      pcmStream.currentPlayingBuffer++;
-      pcmStream.currentPlayingBuffer = 0;
-      if (pcmStream.currentPlayingBuffer >= MAX_PCM_STREAM_BUFFERS) {
-        pcmStream.currentPlayingBuffer = 0;
-      }
-
-      pcm_stream_buffer *nextBuffer =
-        &pcmStream.buffers[pcmStream.currentPlayingBuffer];
-
-      if (nextBuffer->isUsed) {
-        pcmStream.currentPlayingBufferPtr = nextBuffer;
-        pcmStream.isPlaying = true;
-        pcmStream.pendingBlanks = nextBuffer->size /
-          m68k_com->pcmCtrl[nextBuffer->pcmIndex].bytes_per_blank;
-
-        pcm_play(nextBuffer->pcmIndex, pcmStream.controlType, pcmStream.volume);
-      } else {
-        pcmStreamClear();
-      }
+  // Play all available channels at once
+  for (uint32_t i = 0; i < MAX_PCM_STREAM_BUFFERS; ++i) {
+    pcm_stream_buffer *nextBuffer = &pcmStream.buffers[i];
+    if (nextBuffer->isUsed) {
+      pcmStream.isPlaying = true;
+      pcmStream.volume = volume;
+      pcm_play(nextBuffer->pcmIndex, pcmStream.controlType, volume);
     }
   }
 
-  m68k_com->start = 1;
+  sound_notify_driver();
+  return true;
 }
 
-int32_t pcmStreamGetCurrPlay() {
+bool pcmStreamStop() {
   if (pcmStream.isPlaying) {
-    // return m68k_com->pcmCtrl[pcmStream.currentPlayingBufferPtr->pcmIndex]
-    //   .playsize;
-    return pcmStream.currentPlayingBufferPtr->pcmIndex;
-  } else {
-    return -1;
+    for (uint32_t i = 0; i < MAX_PCM_STREAM_BUFFERS; ++i) {
+      pcm_cease(i);
+    }
+
+    pcmStreamClear();
   }
+
+  return true;
 }
+
+void sound_notify_driver(void) { m68k_com->start = 1; }

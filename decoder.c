@@ -29,6 +29,7 @@ uint8_t audioChannels = 0;
 uint8_t audioSamplingResolution = 0;
 uint8_t audioCompression = 0;
 uint16_t audioSamplingFrequencyHz = 0;
+uint32_t *audioLastWriteLocation = NULL;
 
 // Timer
 uint16_t frtOverflowCount = 0;
@@ -815,18 +816,40 @@ void parseVideo(binary_stream_t *stream) {
 inline void parseSample(const film_sample_t *sample, binary_stream_t *stream) {
   if (film_sample_is_audio(sample)) {
     uint32_t length = sample->length;
-    if (stream->audioChannels == 2) {
+
+    // TODO: Proper stereo
+    if (audioChannels == 2) {
       length >>= 1;
-      stream_skip(stream, length);
+      if (length % 2) {
+        length--;
+      }
     }
 
-    uint32_t *nextAudioBuffer = film_get_next_audio_buffer(length);
-    if (nextAudioBuffer != NULL) {
-      stream_readbytes(stream, CAST_DATA16(nextAudioBuffer), length);
-      film_play_audio(length);
-    } else {
-      stream_skip(stream, sample->length);
+    uint32_t missingBytes = length;
+    bool hasReadBytes = false;
+
+    while (missingBytes > 0) {
+      uint32_t readSize = MIN(film_get_next_audio_buffer_size(), missingBytes);
+      audioLastWriteLocation = film_get_next_audio_buffer_ptr(0);
+      if (audioLastWriteLocation != NULL) {
+        stream_readbytes(stream, CAST_DATA16(audioLastWriteLocation), readSize);
+        film_notify_read_audio_buffer_bytes(readSize);
+        hasReadBytes = true;
+      } else {
+        stream_skip(stream, readSize);
+      }
+
+      missingBytes -= readSize;
     }
+    
+    if (audioChannels == 2) {
+      stream_skip(stream, sample->length - length);
+    }
+
+    if (hasReadBytes) {
+      film_play_audio(length);
+    }
+
   } else {
     parseVideo(stream);
   }
@@ -884,10 +907,10 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
   // D = audio compression
   const uint32_t ABCD = stream_read32(&stream);
   const uint8_t videoBPP = (ABCD >> 24) & 0xFF;
-  const uint8_t audioChannels = (ABCD >> 16) & 0xFF;
-  const uint8_t audioSamplingResolution = (ABCD >> 8) & 0xFF;
-  const uint8_t audioCompression = ABCD & 0xFF;
-  const uint16_t audioSamplingFrequencyHz = stream_read16(&stream);
+  audioChannels = (ABCD >> 16) & 0xFF;
+  audioSamplingResolution = (ABCD >> 8) & 0xFF;
+  audioCompression = ABCD & 0xFF;
+  audioSamplingFrequencyHz = stream_read16(&stream);
 
   film_audio_setup(audioSamplingFrequencyHz, audioChannels,
     audioSamplingResolution);
@@ -963,10 +986,10 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
 
     clearLog();
     logMessage("\nPlay time: %ds\nFrame %d\nSamplesInSec: %d\nBytesInSec: "
-               "%d\nLastBytesInSec: %d\nAudio: %c/%d bits/%d Hz/ Comp: %d",
+               "%d\nLastBytesInSec: %d\nAudio: %c/%d bits/%d Hz/ Comp: %d\nSampleSize: %p",
       playTime, sampleId, samplesInSec, bytesInSecCount, lastBytesInSecCount,
       audioChannels == 1 ? 'M' : 'S', audioSamplingResolution,
-      audioSamplingFrequencyHz, audioCompression);
+      audioSamplingFrequencyHz, audioCompression, audioLastWriteLocation);
   }
   
   const int status __unused = cd_block_cmd_data_transfer_end();
