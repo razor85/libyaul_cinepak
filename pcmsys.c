@@ -278,6 +278,8 @@ void pcmStreamConfigure(uint8_t channels, uint8_t bits, uint32_t frequency) {
     } else {
       pcmsys_load_16bit_pcm_slot(bufferSize, frequency, nextBuffer->pcmIndex);
     }
+      
+    memset(getSlotAddress(i), 0, getSlotSize());
   }
 }
 
