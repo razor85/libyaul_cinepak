@@ -328,6 +328,7 @@ bool pcmStreamStop() {
     pcmStreamClear();
   }
 
+  sound_notify_driver();
   return true;
 }
 

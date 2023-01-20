@@ -53,10 +53,8 @@ void film_notify_read_audio_buffer_bytes(uint32_t length) {
 }
 
 void film_play_audio(uint32_t bufferLength __unused) {
-  if (pcmStreamPlay(7)) {
-    vdp2_tvmd_vblank_in_wait();
-    vdp2_tvmd_vblank_out_wait();
-  }
+  pcmStreamPlay(7);
+  sound_notify_driver();
 }
 
 void film_audio_setup(uint32_t frequency, uint32_t channels, uint32_t numBits) {
@@ -69,9 +67,6 @@ void film_audio_setup(uint32_t frequency, uint32_t channels, uint32_t numBits) {
   baseSoundMemory = getSlotAddress(0);
   soundMemory = baseSoundMemory;
   soundMemoryLimit = baseSoundMemory + pcmStreamBufferSize(numBits);
-  if (film_get_next_audio_buffer_size() % 2) {
-    soundMemoryLimit--;
-  }
 
   pcmStreamWarmUp();
   sound_notify_driver();
@@ -319,7 +314,7 @@ void user_init(void) {
   scu_ic_mask_chg(SCU_IC_MASK_ALL, SCU_IC_MASK_HBLANK_IN);
 }
 
-static void _vblank_in_handler(void *work __unused) { sound_notify_driver(); }
+static void _vblank_in_handler(void *work __unused) {}
 
 static void _vblank_out_handler(void *work __unused) {
   smpc_peripheral_intback_issue();

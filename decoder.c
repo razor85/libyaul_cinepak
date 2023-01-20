@@ -32,7 +32,7 @@ uint16_t audioSamplingFrequencyHz = 0;
 uint32_t *audioLastWriteLocation = NULL;
 
 // Timer
-uint16_t frtOverflowCount = 0;
+volatile uint32_t frtOverflowCount = 0;
 const uint32_t frtTimerDiv = CPU_FRT_NTSC_320_128_COUNT_1MS;
   
 // For saving reads
@@ -55,6 +55,11 @@ static void frtTimerStart(uint16_t count) {
 static uint32_t frtTimerEllapsed() {
   uint32_t ticks = (0xFFFF * frtOverflowCount) + cpu_frt_count_get();
   return ticks / frtTimerDiv;
+}
+
+static inline fix16_t fix16_div(fix16_t dividend, fix16_t divisor) {
+  cpu_divu_fix16_set(dividend, divisor);
+  return cpu_divu_quotient_get();
 }
 
 inline void codebook_new(codebook_t *cb, binary_stream_t *stream) {
@@ -906,7 +911,7 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
   // C = audio sampling resolution
   // D = audio compression
   const uint32_t ABCD = stream_read32(&stream);
-  const uint8_t videoBPP = (ABCD >> 24) & 0xFF;
+  const uint8_t videoBPP __unused = (ABCD >> 24) & 0xFF;
   audioChannels = (ABCD >> 16) & 0xFF;
   audioSamplingResolution = (ABCD >> 8) & 0xFF;
   audioCompression = ABCD & 0xFF;
@@ -936,8 +941,8 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
   logMessage("Frame rate base frequency: %d Hz with %d samples\n", framerateBaseFrequencyHz,
     numSamples);
 
-  const uint32_t sampleDescriptionPos = stream_pos(&stream);
-  const uint32_t sampleDataPos = filmHeaderLength;
+  const uint32_t sampleDescriptionPos __unused = stream_pos(&stream);
+  const uint32_t sampleDataPos __unused = filmHeaderLength;
 
   // Must be called just before the sample list
   film_sample_cache_new(&stream, numSamples);
@@ -948,23 +953,45 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
   cpu_frt_ovi_set(frtOviHandler);
   frtTimerStart(0);
 
-  uint32_t samplesInSec = 0;
-  uint32_t minSamplesInSec = 0xFFFFFFFF;
-  uint32_t samplesInSecCount = 0;
-  uint32_t bytesInSecCount = 0;
-  uint32_t lastBytesInSecCount = 0;
-  uint32_t playTime = 0;
+  // Statistics
+  uint32_t samplesInSec __unused = 0;
+  uint32_t minSamplesInSec __unused = 0xFFFFFFFF;
+  uint32_t samplesInSecCount __unused = 0;
+  uint32_t bytesInSecCount __unused = 0;
+  uint32_t lastBytesInSecCount __unused = 0;
+  uint32_t playTime __unused = 0;
+
+  // FILM timing
+  const fix16_t ticksPerMillisecond =
+    fix16_div(fix16_int32_from(framerateBaseFrequencyHz), FIX16(1000.0));
+
+  fix16_t ticksUntilNextFrame = FIX16(0);
+  fix16_t tickCount = FIX16(0);
+  uint32_t lastFrameTime = frtTimerEllapsed();
 
   for (uint32_t sampleId = 0; sampleId < numSamples; ++sampleId) {
     if (!film_loop_handler()) {
       break;
     }
 
-    uint32_t timeEllapsed = frtTimerEllapsed();
+    film_sample_t sample = film_sample_get_next_sample(&stream.sampleCache);
+
+    // Wait until we can proccess next frame due to pending interval
+    const bool isVideo = film_sample_is_video(&sample);
+    uint32_t timeEllapsed;
+
+    timeEllapsed = frtTimerEllapsed();
+    const uint32_t deltaTime = timeEllapsed - lastFrameTime;
+    if (deltaTime > 0) {
+      lastFrameTime = timeEllapsed;
+      tickCount += fix16_mul(fix16_int32_from(deltaTime), ticksPerMillisecond);
+    }
+
     if (timeEllapsed >= 1000) {
       samplesInSec = samplesInSecCount;
-      if (samplesInSec < minSamplesInSec)
+      if (samplesInSec < minSamplesInSec) {
         minSamplesInSec = samplesInSec;
+      }
 
       playTime += 1;
       samplesInSecCount = 0;
@@ -972,26 +999,40 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
       bytesInSecCount = 0;
       frtTimerStart(timeEllapsed - 1000);
     }
+      
+    lastFrameTime = frtTimerEllapsed();
 
-    film_sample_t sample = film_sample_get_next_sample(&stream.sampleCache);
     parseSample(&sample, &stream);
     samplesInSecCount++;
     bytesInSecCount += sample.length;
+    
+    while (isVideo && (tickCount < ticksUntilNextFrame)) {
+      timeEllapsed = frtTimerEllapsed();
+      const uint32_t deltaTime = timeEllapsed - lastFrameTime;
+      if (deltaTime > 0) {
+        lastFrameTime = timeEllapsed;
+        tickCount += fix16_mul(fix16_int32_from(deltaTime), ticksPerMillisecond);
+      }
+    }
 
-    if (film_sample_is_video(&sample)) {
+    if (isVideo) {
       const uint32_t delta = videoStartY * VIDEO_WIDTH;
       vdp_dma_enqueue(vdp2DestinationBuffer + delta, vdp2ImagePtr + delta,
         VIDEO_WIDTH * videoHeight * sizeof(uint16_t));
+
+      ticksUntilNextFrame = fix16_int32_from(sample.interval);
+      tickCount = FIX16(0);
     }
 
     clearLog();
-    logMessage("\nPlay time: %ds\nFrame %d\nSamplesInSec: %d\nBytesInSec: "
-               "%d\nLastBytesInSec: %d\nAudio: %c/%d bits/%d Hz/ Comp: %d\nSampleSize: %p",
+    logMessage(
+      "\nPlay time: %ds\nFrame %d\nSamplesInSec: %d\nBytesInSec: "
+      "%d\nLastBytesInSec: %d\nAudio: %c / %d bits / %d Hz\nTickRate: %d Hz",
       playTime, sampleId, samplesInSec, bytesInSecCount, lastBytesInSecCount,
       audioChannels == 1 ? 'M' : 'S', audioSamplingResolution,
-      audioSamplingFrequencyHz, audioCompression, audioLastWriteLocation);
+      audioSamplingFrequencyHz, framerateBaseFrequencyHz);
   }
-  
+
   const int status __unused = cd_block_cmd_data_transfer_end();
   DEBUG_REQUIRE_EQ(status, 0);
 }
