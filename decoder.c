@@ -140,6 +140,25 @@ void stripdata_copyLastCodebooks(stripdata_t *data) {
   cpu_dmac_channel_start(0);
 }
 
+volatile uint32_t copyingVideoFrame = 0;
+inline static void waitCopyingVideoFrame() {
+  if (copyingVideoFrame != 0) {
+    while (vdp_dma_count_get() >= copyingVideoFrame)
+      cpu_instr_nop();
+
+    copyingVideoFrame = 0;
+  }
+}
+
+void copyVideoFrame(uint32_t delta) {
+  waitCopyingVideoFrame();
+
+  vdp_dma_enqueue(vdp2DestinationBuffer + delta, vdp2ImagePtr + delta,
+    VIDEO_WIDTH * videoHeight * sizeof(uint16_t));
+
+  copyingVideoFrame = vdp_dma_count_get();
+}
+
 void stripdata_copyLastCodebooks_nodma(stripdata_t *data) {
   DEBUG_REQUIRE_GT(data->strip, 0);
   DEBUG_REQUIRE_LT(data->strip, MAX_STRIPS);
@@ -683,6 +702,8 @@ void readV1VectorsInChunk(binary_stream_t *stream, stripdata_t *data,
   stripData.writeX = originalWriteX;
   stripData.writeY = originalWriteY;
 
+  waitCopyingVideoFrame();
+
   while (readBytes > 0) {
     const uint32_t readNow = MIN(readBytes, TMP_BUFFER_SIZE);
 
@@ -1109,8 +1130,7 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
 
     if (isVideo) {
       const uint32_t delta = videoStartY * VIDEO_WIDTH;
-      vdp_dma_enqueue(vdp2DestinationBuffer + delta, vdp2ImagePtr + delta,
-        VIDEO_WIDTH * videoHeight * sizeof(uint16_t));
+      copyVideoFrame(delta);
 
       ticksUntilNextFrame = (sample.interval * 1000) / framerateBaseFrequencyHz;
       tickCount = 0;
