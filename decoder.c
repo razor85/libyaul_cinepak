@@ -29,7 +29,8 @@ uint8_t audioChannels = 0;
 uint8_t audioSamplingResolution = 0;
 uint8_t audioCompression = 0;
 uint16_t audioSamplingFrequencyHz = 0;
-uint32_t *audioLastWriteLocation = NULL;
+uint32_t audioNumPlayedSamples = 0;
+uint32_t audioSize = 0;
 
 // Timer
 volatile uint32_t frtOverflowCount = 0;
@@ -818,43 +819,50 @@ void parseVideo(binary_stream_t *stream) {
   }
 }
 
+void parseAudio(const film_sample_t *sample, binary_stream_t *stream) {
+  uint32_t length = sample->length;
+
+  // TODO: Proper stereo
+  if (audioChannels == 2) {
+    length >>= 1;
+    DEBUG_REQUIRE_EQ(length % 2, 0);
+  }
+
+  uint32_t missingBytes = length;
+  bool hasReadBytes = false;
+    
+  uint32_t *debug = (uint32_t *) LWRAM(0);
+
+  audioSize = length;
+  while (missingBytes > 0) {
+    uint32_t readSize = MIN(film_audio_get_next_buffer_size(), missingBytes);
+    uint16_t *writeLocation = film_audio_get_next_buffer_ptr(0);
+    debug[0] = (uint32_t) writeLocation;
+
+    if (writeLocation != NULL) {
+      stream_readbytes_generic(stream, writeLocation, readSize);
+      film_audio_notify_read_buffer_bytes(readSize);
+      hasReadBytes = true;
+    } else {
+      stream_skip_generic(stream, readSize);
+    }
+
+    missingBytes -= readSize;
+  }
+
+  if (audioChannels == 2) {
+    stream_skip_generic(stream, sample->length - length);
+  }
+
+  if (hasReadBytes) {
+    film_audio_play(length);
+    audioNumPlayedSamples++;
+  }
+}
+
 inline void parseSample(const film_sample_t *sample, binary_stream_t *stream) {
   if (film_sample_is_audio(sample)) {
-    uint32_t length = sample->length;
-
-    // TODO: Proper stereo
-    if (audioChannels == 2) {
-      length >>= 1;
-      if (length % 2) {
-        length--;
-      }
-    }
-
-    uint32_t missingBytes = length;
-    bool hasReadBytes = false;
-
-    while (missingBytes > 0) {
-      uint32_t readSize = MIN(film_get_next_audio_buffer_size(), missingBytes);
-      audioLastWriteLocation = film_get_next_audio_buffer_ptr(0);
-      if (audioLastWriteLocation != NULL) {
-        stream_readbytes(stream, CAST_DATA16(audioLastWriteLocation), readSize);
-        film_notify_read_audio_buffer_bytes(readSize);
-        hasReadBytes = true;
-      } else {
-        stream_skip(stream, readSize);
-      }
-
-      missingBytes -= readSize;
-    }
-    
-    if (audioChannels == 2) {
-      stream_skip(stream, sample->length - length);
-    }
-
-    if (hasReadBytes) {
-      film_play_audio(length);
-    }
-
+    parseAudio(sample, stream);
   } else {
     parseVideo(stream);
   }
@@ -916,6 +924,7 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
   audioSamplingResolution = (ABCD >> 8) & 0xFF;
   audioCompression = ABCD & 0xFF;
   audioSamplingFrequencyHz = stream_read16(&stream);
+  audioNumPlayedSamples = 0;
 
   film_audio_setup(audioSamplingFrequencyHz, audioChannels,
     audioSamplingResolution);
@@ -949,10 +958,13 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
 
   logMessage("SamplePos: %d\nSampleDataPos: %d\nPos: %d\n", sampleDescriptionPos, sampleDataPos,
     stream_pos(&stream));
+  
+  // Ask the sound driver to stop the warm up sound and get ready to start processing sounds
+  film_audio_prepare_to_play();
 
   cpu_frt_ovi_set(frtOviHandler);
   frtTimerStart(0);
-
+  
   // Statistics
   uint32_t samplesInSec __unused = 0;
   uint32_t minSamplesInSec __unused = 0xFFFFFFFF;
@@ -1024,10 +1036,11 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
     clearLog();
     logMessage(
       "\nPlay time: %ds\nFrame %d\nSamplesInSec: %d\nBytesInSec: "
-      "%d\nLastBytesInSec: %d\nAudio: %c / %d bits / %d Hz\nTickRate: %d Hz",
+      "%d\nLastBytesInSec: %d\nAudio: %c / %d bits / %d Hz\nNumPlayedSamples: %d\nTickRate: %d Hz",
       playTime, sampleId, samplesInSec, bytesInSecCount, lastBytesInSecCount,
       audioChannels == 1 ? 'M' : 'S', audioSamplingResolution,
-      audioSamplingFrequencyHz, framerateBaseFrequencyHz);
+      audioSamplingFrequencyHz, audioNumPlayedSamples,
+      framerateBaseFrequencyHz);
   }
 
   const int status __unused = cd_block_cmd_data_transfer_end();

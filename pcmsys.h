@@ -218,12 +218,13 @@ void smpc_issue_command(unsigned char cmd);
 
 uint8_t *getSlotAddress(uint32_t slot);
 uint32_t getSlotSize();
-uint32_t pcmStreamBufferSize(uint8_t bits);
+uint32_t pcmStreamBufferSize(uint8_t bits, uint32_t frequency);
 
 void pcmsys_load_16bit_pcm_slot(uint32_t length, int sample_rate,
-  uint32_t slot);
+  uint32_t slot, int8_t loopType);
 
-void pcmsys_load_8bit_pcm_slot(uint32_t length, int sample_rate, uint32_t slot);
+void pcmsys_load_8bit_pcm_slot(uint32_t length, int sample_rate, uint32_t slot,
+  int8_t loopType);
 
 void pcmsys_load_driver(void *buffer, uint32_t length);
 
@@ -236,6 +237,7 @@ void sound_notify_driver(void);
 void pcmStreamInitialize();
 void pcmStreamConfigure(uint8_t channels, uint8_t bits, uint32_t frequency);
 void pcmStreamWarmUp();
+void pcmStreamWarmUpStop();
 bool pcmStreamPlay(uint8_t volume);
 bool pcmStreamStop();
 

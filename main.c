@@ -35,15 +35,15 @@ uint8_t *baseSoundMemory = NULL;
 uint8_t *soundMemory = NULL;
 uint8_t *soundMemoryLimit = NULL;
 
-uint32_t film_get_next_audio_buffer_size() {
+uint32_t film_audio_get_next_buffer_size() {
   return (uint32_t) (soundMemoryLimit - soundMemory);
 }
 
-uint32_t *film_get_next_audio_buffer_ptr(uint8_t slot) {
-  return (uint32_t *) soundMemory + (slot * getSlotSize());
+uint16_t *film_audio_get_next_buffer_ptr(uint8_t slot) {
+  return (uint16_t *) soundMemory + (slot * getSlotSize());
 }
 
-void film_notify_read_audio_buffer_bytes(uint32_t length) {
+void film_audio_notify_read_buffer_bytes(uint32_t length) {
   soundMemory += length;
   DEBUG_REQUIRE_LE(soundMemory, soundMemoryLimit);
 
@@ -52,7 +52,7 @@ void film_notify_read_audio_buffer_bytes(uint32_t length) {
   }
 }
 
-void film_play_audio(uint32_t bufferLength __unused) {
+void film_audio_play(uint32_t bufferLength __unused) {
   pcmStreamPlay(7);
   sound_notify_driver();
 }
@@ -66,12 +66,15 @@ void film_audio_setup(uint32_t frequency, uint32_t channels, uint32_t numBits) {
   pcmStreamConfigure(channels == 2 ? 1 : 1, numBits, frequency);
   baseSoundMemory = getSlotAddress(0);
   soundMemory = baseSoundMemory;
-  soundMemoryLimit = baseSoundMemory + pcmStreamBufferSize(numBits);
+  soundMemoryLimit = baseSoundMemory + pcmStreamBufferSize(numBits, frequency);
 
   pcmStreamWarmUp();
   sound_notify_driver();
-  vdp2_tvmd_vblank_in_wait();
-  vdp2_tvmd_vblank_out_wait();
+}
+
+void film_audio_prepare_to_play() {
+  pcmStreamWarmUpStop();
+  sound_notify_driver();
 }
 
 void film_audio_reset() {
@@ -177,6 +180,8 @@ int main() {
       movieSelected = false;
 
       pcmStreamStop();
+      sound_notify_driver();
+
       film_audio_reset();
 
       dbgio_dev_font_load();
@@ -300,7 +305,7 @@ void user_init(void) {
   vdp_sync_vblank_out_set(_vblank_out_handler, NULL);
 
   cpu_frt_init(CPU_FRT_CLOCK_DIV_128);
-  cpu_frt_interrupt_priority_set(8);
+  cpu_frt_interrupt_priority_set(15);
 
   dbgio_init();
   dbgio_dev_default_init(DBGIO_DEV_VDP2);
