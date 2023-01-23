@@ -1,0 +1,2 @@
+python expandProfile.py
+pause
