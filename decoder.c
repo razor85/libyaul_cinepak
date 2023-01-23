@@ -962,11 +962,8 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
   uint32_t playTime __unused = 0;
 
   // FILM timing
-  const fix16_t ticksPerMillisecond =
-    fix16_div(fix16_int32_from(framerateBaseFrequencyHz), FIX16(1000.0));
-
-  fix16_t ticksUntilNextFrame = FIX16(0);
-  fix16_t tickCount = FIX16(0);
+  uint32_t ticksUntilNextFrame = 0;
+  uint32_t tickCount = 0;
   uint32_t lastFrameTime = frtTimerEllapsed();
 
   for (uint32_t sampleId = 0; sampleId < numSamples; ++sampleId) {
@@ -984,7 +981,7 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
     const uint32_t deltaTime = timeEllapsed - lastFrameTime;
     if (deltaTime > 0) {
       lastFrameTime = timeEllapsed;
-      tickCount += fix16_mul(fix16_int32_from(deltaTime), ticksPerMillisecond);
+      tickCount += deltaTime;
     }
 
     if (timeEllapsed >= 1000) {
@@ -1011,7 +1008,7 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
       const uint32_t deltaTime = timeEllapsed - lastFrameTime;
       if (deltaTime > 0) {
         lastFrameTime = timeEllapsed;
-        tickCount += fix16_mul(fix16_int32_from(deltaTime), ticksPerMillisecond);
+        tickCount += deltaTime;
       }
     }
 
@@ -1020,8 +1017,8 @@ void play_film(cdfs_filelist_entry_t *entry, film_sample_t *sampleCache,
       vdp_dma_enqueue(vdp2DestinationBuffer + delta, vdp2ImagePtr + delta,
         VIDEO_WIDTH * videoHeight * sizeof(uint16_t));
 
-      ticksUntilNextFrame = fix16_int32_from(sample.interval);
-      tickCount = FIX16(0);
+      ticksUntilNextFrame = (sample.interval * 1000) / framerateBaseFrequencyHz;
+      tickCount = 0;
     }
 
     clearLog();
