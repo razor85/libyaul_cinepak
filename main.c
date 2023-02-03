@@ -57,7 +57,7 @@ void film_audio_play(uint32_t bufferLength __unused) {
   sound_notify_driver();
 }
 
-void film_audio_setup(uint32_t frequency, uint32_t channels, uint32_t numBits) {
+void film_audio_setup(uint16_t frequency, uint32_t channels, uint32_t numBits) {
   DEBUG_REQUIRE_EQ(baseSoundMemory, NULL);
   DEBUG_REQUIRE_EQ(soundMemory, NULL);
   DEBUG_REQUIRE_EQ(soundMemoryLimit, NULL);
@@ -67,14 +67,9 @@ void film_audio_setup(uint32_t frequency, uint32_t channels, uint32_t numBits) {
   baseSoundMemory = getSlotAddress(0);
   soundMemory = baseSoundMemory;
   soundMemoryLimit = baseSoundMemory + pcmStreamBufferSize(numBits, frequency);
-
-  pcmStreamWarmUp();
-  sound_notify_driver();
 }
 
 void film_audio_prepare_to_play() {
-  pcmStreamWarmUpStop();
-  sound_notify_driver();
 }
 
 void film_audio_reset() {

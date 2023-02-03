@@ -31,7 +31,6 @@ uint8_t audioSamplingResolution = 0;
 uint8_t audioCompression = 0;
 uint16_t audioSamplingFrequencyHz = 0;
 uint32_t audioNumPlayedSamples = 0;
-uint32_t audioSize = 0;
 
 // Timer
 volatile uint32_t frtOverflowCount = 0;
@@ -143,7 +142,7 @@ void stripdata_copyLastCodebooks(stripdata_t *data) {
 volatile uint32_t copyingVideoFrame = 0;
 inline static void waitCopyingVideoFrame() {
   if (copyingVideoFrame != 0) {
-    while (vdp_dma_count_get() >= copyingVideoFrame)
+    while (vdp_dma_count_get() > 0)
       cpu_instr_nop();
 
     copyingVideoFrame = 0;
@@ -930,38 +929,22 @@ void parseAudio(const film_sample_t *sample, binary_stream_t *stream) {
   if (audioChannels == 2) {
     length >>= 1;
     DEBUG_REQUIRE_EQ(length % 2, 0);
-  }
-
-  uint32_t missingBytes = length;
-  bool hasReadBytes = false;
-    
-  uint32_t *debug = (uint32_t *) LWRAM(0);
-
-  audioSize = length;
-  while (missingBytes > 0) {
-    uint32_t readSize = MIN(film_audio_get_next_buffer_size(), missingBytes);
-    uint16_t *writeLocation = film_audio_get_next_buffer_ptr(0);
-    debug[0] = (uint32_t) writeLocation;
-
-    if (writeLocation != NULL) {
-      stream_readbytes_generic(stream, writeLocation, readSize);
-      film_audio_notify_read_buffer_bytes(readSize);
-      hasReadBytes = true;
-    } else {
-      stream_skip_generic(stream, readSize);
-    }
-
-    missingBytes -= readSize;
-  }
-
-  if (audioChannels == 2) {
     stream_skip_generic(stream, sample->length - length);
   }
 
-  if (hasReadBytes) {
-    film_audio_play(length);
-    audioNumPlayedSamples++;
+  uint32_t missingBytes = length;
+  while (missingBytes > 0) {
+    uint32_t readSize = MIN(film_audio_get_next_buffer_size(), missingBytes);
+    uint16_t *writeLocation = film_audio_get_next_buffer_ptr(0);
+    DEBUG_REQUIRE_NE(writeLocation, NULL);
+
+    stream_readbytes_generic(stream, writeLocation, readSize);
+    film_audio_notify_read_buffer_bytes(readSize);
+    missingBytes -= readSize;
   }
+
+  film_audio_play(length);
+  audioNumPlayedSamples++;
 }
 
 inline void parseSample(const film_sample_t *sample, binary_stream_t *stream) {

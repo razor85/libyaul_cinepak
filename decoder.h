@@ -95,7 +95,7 @@ extern void film_audio_notify_read_buffer_bytes(uint32_t length);
 
 extern void film_audio_play(uint32_t bufferLength);
 
-extern void film_audio_setup(uint32_t frequency, uint32_t numChannels, uint32_t sampleResolution);
+extern void film_audio_setup(uint16_t frequency, uint32_t numChannels, uint32_t sampleResolution);
 
 extern void film_audio_prepare_to_play();
 
