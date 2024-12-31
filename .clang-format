@@ -27,7 +27,7 @@ BreakBeforeBraces: Attach
 BreakBeforeTernaryOperators: 'false'
 BreakConstructorInitializers: BeforeComma
 BreakStringLiterals: 'false'
-ColumnLimit: '80'
+ColumnLimit: '120'
 CompactNamespaces: 'false'
 ConstructorInitializerAllOnOneLineOrOnePerLine: 'false'
 ContinuationIndentWidth: '2'

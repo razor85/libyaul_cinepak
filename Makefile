@@ -5,27 +5,35 @@ endif
 include $(YAUL_INSTALL_ROOT)/share/build.pre.mk
 
 SH_PROGRAM:= cinepak_player
-SH_SRCS :=   \
-  base.c     \
-  decoder.c  \
-  main.c     \
-  pcmsys.c
+SH_SRCS :=     \
+  base.cpp     \
+  decoder.cpp  \
+  main.cpp     \
+  memory.cpp   \
+  timer.cpp     
 
 SH_LIBRARIES:=
-SH_CFLAGS+= -I. -O2 -g -Wall
-IP_VERSION:= V1.000
-IP_RELEASE_DATE:= 20220720
+PROJECT_COMMON_FLAGS:=  \
+  -O2                   \
+  -g                    \
+  -std=c++17            \
+  -Wall                 \
+  -Wno-unused-function  \
+  -Wno-register         \
+  -fno-builtin          \
+  -flto=auto
+
+SH_CFLAGS += $(PROJECT_COMMON_FLAGS)
+SH_CXXFLAGS += $(PROJECT_COMMON_FLAGS)
+IP_VERSION := V1.000
+IP_RELEASE_DATE:= 20241019
 IP_AREAS:= JTUBKAEL
 IP_PERIPHERALS:= JAMKST
 IP_TITLE:= cinepak_player
 IP_MASTER_STACK_ADDR:= 0x06004000
-IP_SLAVE_STACK_ADDR:= 0x06001E00
+IP_SLAVE_STACK_ADDR:= 0x06002000
 IP_1ST_READ_ADDR:= 0x06004000
 IP_1ST_READ_SIZE:= 0
 
 
 include $(YAUL_INSTALL_ROOT)/share/build.post.iso-cue.mk
-
-post-build-iso:
-	printf "20: 542D313830303347" | xxd -r - cinepak_player.iso
-

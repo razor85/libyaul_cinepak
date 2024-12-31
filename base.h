@@ -1,85 +1,217 @@
-#ifndef BASE_H
-#define BASE_H
+#pragma once
 
-#include "intellisense.h"
-
-#include <int16.h>
+#include <gamemath.h>
 #include <stdint.h>
 #include <yaul.h>
 
-extern void satAssert(const char *filename, int line, const char *msg);
+#ifndef SKIP_CACHE
+#  define SKIP_CACHE __section(".uncached")
+#endif
 
-// #define HAS_DEBUG_REQUIRE_FUNCTIONS
-#ifdef HAS_DEBUG_REQUIRE_FUNCTIONS
-#define __STRINGIFY(x) #x
-#define __TOSTRING(x) __STRINGIFY(x)
-#define REQUIRE_BODY_OP(A, B, _OP_)                                            \
-  do {                                                                         \
-    if (!((A)_OP_(B))) {                                                       \
-      satAssert(__FILE__, __LINE__,                                            \
-        "Error (" #A " " #_OP_ " " #B ") at " __FILE__                         \
-        ":" __TOSTRING(__LINE__));                                             \
-    }                                                                          \
-  } while (0)
+#ifndef FORCE_INLINE
+#  define FORCE_INLINE __attribute__((always_inline)) inline
+#endif
 
-#define DEBUG_REQUIRE_EQ(A, B) REQUIRE_BODY_OP(A, B, ==)
-#define DEBUG_REQUIRE_NE(A, B) REQUIRE_BODY_OP(A, B, !=)
-#define DEBUG_REQUIRE_LE(A, B) REQUIRE_BODY_OP(A, B, <=)
-#define DEBUG_REQUIRE_LT(A, B) REQUIRE_BODY_OP(A, B, <)
-#define DEBUG_REQUIRE_GE(A, B) REQUIRE_BODY_OP(A, B, >=)
-#define DEBUG_REQUIRE_GT(A, B) REQUIRE_BODY_OP(A, B, >)
-#define DEBUG_REQUIRE(A)                                                       \
-  do {                                                                         \
-    if (!(A)) {                                                                \
-      satAssert(__FILE__, __LINE__,                                            \
-        "Error (" #A " is false) at " __FILE__ ":" __TOSTRING(__LINE__));      \
-    }                                                                          \
-  } while (0)
+#ifndef NO_INLINE
+#  define NO_INLINE __attribute__((noinline))
+#endif
 
-#define VDP_INFLOOP()                                                          \
-  while (1) {                                                                  \
-    dbgio_flush();                                                             \
-    vdp2_sync();                                                               \
-    vdp2_sync_wait();                                                          \
+#define DEBUG_FUNCTIONS_ON
+#define DEBUG_STATS
+
+#ifdef min
+#  undef min
+#endif
+
+#ifdef max
+#  undef max
+#endif
+
+#ifdef abs
+#  undef abs
+#endif
+
+enum TransferCommands { TC_REQUEST_FILE = 0, TC_REQUEST_FILE_SIZE, TC_MESSAGE, TC_INVALID = 0xFF };
+
+namespace std {
+using nullptr_t = decltype(nullptr);
+
+template <class T>
+struct remove_reference;
+
+template <class T>
+using remove_reference_t = typename remove_reference<T>::type;
+
+template <class T>
+constexpr remove_reference_t<T> &&move(T &&t) noexcept;
+
+template <class T>
+struct is_trivially_destructible;
+
+} // namespace std
+
+class Console {
+public:
+  static constexpr bool HasUsbConnection{false};
+
+  static void initialize() {
+    dbgio_dev_default_init(DBGIO_DEV_VDP2);
+    dbgio_dev_font_load();
   }
 
-#define logError(__FMT__, ...)                                                                     \
-  do {                                                                                             \
-    clearLog();                                                                                    \
-    dbgio_printf(__FMT__, __VA_ARGS__);                                                            \
-    dbgio_flush();                                                                                 \
-    vdp2_sync();                                                                                   \
-    vdp2_sync_wait();                                                                              \
-  } while (true)
+  static void clear() { dbgio_printf("[1;1H[2J"); }
 
-#define logMessage(__FMT__, ...)                                                                   \
-  do {                                                                                             \
-    dbgio_printf(__FMT__, __VA_ARGS__);                                                            \
-    dbgio_flush();                                                                                 \
-  } while (false)
+  static void flush() { dbgio_flush(); }
 
-#else // HAS_DEBUG_REQUIRE_FUNCTIONS
-#define DEBUG_REQUIRE_EQ(A, B)
-#define DEBUG_REQUIRE_NE(A, B)
-#define DEBUG_REQUIRE_LE(A, B)
-#define DEBUG_REQUIRE_LT(A, B)
-#define DEBUG_REQUIRE_GE(A, B)
-#define DEBUG_REQUIRE_GT(A, B)
-#define DEBUG_REQUIRE(A)
-#define VDP_INFLOOP() \
-    do {              \
-    } while (false)
+  // Print to usb_dev_tool
+  template <typename... Args>
+  static void printToUsb(const char *msg, const Args &...args) {
+    if constexpr (HasUsbConnection) {
+      char tmpBuffer[128] = {};
+      ::snprintf(tmpBuffer, 128, msg, args...);
 
-#define logError(__FMT__, ...) \
-    do {                       \
-    } while (true)
+      const uint32_t msgLen = strlen(tmpBuffer);
 
-#define logMessage(__FMT__, ...) \
-    do {                         \
-    } while (false)
+      usb_cart_byte_send(static_cast<uint8_t>(TC_MESSAGE));
+      usb_cart_long_send(msgLen);
+      for (uint32_t i = 0; i < msgLen; ++i) {
+        usb_cart_byte_send(tmpBuffer[i]);
+      }
+    }
+  }
 
-#endif // HAS_DEBUG_REQUIRE_FUNCTIONS
+  template <typename... Args>
+  static void printf(const char *msg, const Args &...args) {
+    dbgio_printf(msg, args...);
+  }
 
-static __unused void clearLog() { dbgio_printf("[H[2J"); }
+  template <typename... Args>
+  static void log(const char *msg, const Args &...args) {
+    printToUsb(msg, args...);
+    dbgio_printf(msg, args...);
+  }
 
-#endif // BASE_H
+  template <typename... Args>
+  static void printf_flush(const char *msg, const Args &...args) {
+    dbgio_printf(msg, args...);
+    dbgio_flush();
+  }
+
+  template <typename... Args>
+  static void log_flush(const char *msg, const Args &...args) {
+    printToUsb(msg, args...);
+    dbgio_printf(msg, args...);
+    dbgio_flush();
+  }
+
+  // Printf to mednafen.
+  static void mPrint(const char *msg) {
+#ifdef DEBUG_FUNCTIONS_ON
+    volatile static char *debugAddress{reinterpret_cast<char *>(0x22100001)};
+
+    const char *msgPtr{msg};
+    while (*msgPtr != '\0') {
+      *debugAddress = *msgPtr;
+      msgPtr++;
+    }
+#endif
+  }
+};
+
+template <typename T>
+static void swap(T &a, T &b) noexcept {
+  const T tmp{a};
+  a = b;
+  b = tmp;
+}
+
+template <typename TA, typename TB>
+struct Pair {
+  TA _0;
+  TB _1;
+};
+
+template <typename T, typename ValueT>
+T clamp(ValueT v, T min, T max) {
+  if (v < min) {
+    return static_cast<T>(min);
+  } else if (v > max) {
+    return static_cast<T>(max);
+  } else {
+    return static_cast<T>(v);
+  }
+}
+
+template <typename T>
+class Optional {
+private:
+  void __destroy() {
+    if (m_hasValue) {
+      realValue.~T();
+    }
+  }
+
+public:
+  Optional()
+      : dummy(0)
+      , m_hasValue(false) {}
+
+  Optional(const T &value)
+      : realValue(value)
+      , m_hasValue(true) {}
+
+  Optional(T &&value)
+      : realValue(std::move(value))
+      , m_hasValue(true) {}
+
+  ~Optional() { __destroy(); }
+
+  void reset() {
+    __destroy();
+
+    dummy = 0;
+    m_hasValue = false;
+  }
+
+  Optional &operator=(std::nullptr_t) {
+    __destroy();
+
+    dummy = 0;
+    m_hasValue = false;
+    return *this;
+  }
+
+  Optional &operator=(const T &value) {
+    __destroy();
+
+    realValue = value;
+    m_hasValue = true;
+    return *this;
+  }
+
+  T &operator*() noexcept {
+    assert(m_hasValue);
+    return realValue;
+  }
+
+  const T &operator*() const noexcept {
+    assert(m_hasValue);
+    return realValue;
+  }
+
+  T &get() noexcept { return *this; }
+
+  const T &get() const noexcept { return *this; }
+
+  [[nodiscard]] bool hasValue() { return m_hasValue; }
+
+  explicit operator bool() const noexcept { return m_hasValue; }
+
+private:
+  union {
+    char dummy;
+    T realValue;
+  };
+
+  bool m_hasValue{false};
+};
