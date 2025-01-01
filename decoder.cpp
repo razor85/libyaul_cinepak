@@ -7,12 +7,13 @@ namespace {
 struct Video {
   static constexpr uint32_t TargetWidth = 320;
   static constexpr uint32_t TargetHeight = 240;
+  static constexpr uint32_t TargetSize = TargetWidth * TargetHeight;
 
   uint32_t height = TargetHeight;
   uint32_t startY = 0;
   uint16_t *vdp2DestinationBuffer = reinterpret_cast<uint16_t *>(VDP2_VRAM_ADDR(0, 0));
 
-  uint16_t tmpBuffer[TargetWidth * TargetHeight];
+  uint16_t tmpBuffer[TargetSize];
   uint16_t *vdp2ImagePtr = tmpBuffer;
 };
 
@@ -20,9 +21,9 @@ struct Audio {
   uint32_t numPlayedSamples = 0;
 };
 
+constexpr bool ShowStatistics = true;
 Video video;
 Audio audio;
-FilmStream::StripData tmpStripData;
 
 // DMA
 volatile bool copyingBlocks = false;
@@ -57,9 +58,8 @@ void copyVideoFrame(uint32_t delta) {
 }
 
 void initializeFilm() {
-  memset(video.vdp2ImagePtr, 0, Video::TargetWidth * Video::TargetHeight * sizeof(uint16_t));
-  vdp_dma_enqueue(video.vdp2DestinationBuffer, video.vdp2ImagePtr,
-    Video::TargetWidth * Video::TargetHeight * sizeof(uint16_t));
+  memset(video.vdp2ImagePtr, 0, Video::TargetSize * sizeof(uint16_t));
+  vdp_dma_enqueue(video.vdp2DestinationBuffer, video.vdp2ImagePtr, Video::TargetSize * sizeof(uint16_t));
 
   vdp2_sync();
   vdp2_sync_wait();
@@ -90,9 +90,9 @@ void FilmStream::Codebook555::create(Codebook &book) {
 
     const rgb1555_t tmpColor{
       1u,
-      static_cast<unsigned int>(nr >> 3),
-      static_cast<unsigned int>(ng >> 3),
       static_cast<unsigned int>(nb >> 3),
+      static_cast<unsigned int>(ng >> 3),
+      static_cast<unsigned int>(nr >> 3),
     };
 
     color[i] = tmpColor.raw;
@@ -147,10 +147,10 @@ void FilmStream::createCache() {
   read(const_cast<Sample *>(m_sampleCache), sizeof(Sample) * m_sampleCacheCount);
 }
 
-void FilmStream::renderPixel1(FilmStream::StripData &data, uint8_t c0) {
-  const Codebook555 e0 = data.getV1Codebook555()[c0];
-  const uint32_t x = data.writeX;
-  const uint32_t y = data.writeY;
+void FilmStream::renderPixel1(uint8_t c0) {
+  const Codebook555 e0 = m_stripData.getV1Codebook555()[c0];
+  const uint32_t x = m_stripData.writeX;
+  const uint32_t y = m_stripData.writeY;
 
   // VDP2 image has 512x256
   uint32_t imageIndex = ((video.startY + y) * Video::TargetWidth) + x;
@@ -161,27 +161,27 @@ void FilmStream::renderPixel1(FilmStream::StripData &data, uint8_t c0) {
   // +----+----+  +---+  +---+
   // | y2 | y3 |
   // +----+----+
-  if (y + 0 >= data.bottomY)
+  if (y + 0 >= m_stripData.bottomY)
     return;
 
   video.vdp2ImagePtr[imageIndex] = video.vdp2ImagePtr[imageIndex + 1] = e0.color[0];
   video.vdp2ImagePtr[imageIndex + 2] = video.vdp2ImagePtr[imageIndex + 3] = e0.color[1];
 
-  if (y + 1 >= data.bottomY)
+  if (y + 1 >= m_stripData.bottomY)
     return;
 
   imageIndex += Video::TargetWidth;
   video.vdp2ImagePtr[imageIndex] = video.vdp2ImagePtr[imageIndex + 1] = e0.color[0];
   video.vdp2ImagePtr[imageIndex + 2] = video.vdp2ImagePtr[imageIndex + 3] = e0.color[1];
 
-  if (y + 2 >= data.bottomY)
+  if (y + 2 >= m_stripData.bottomY)
     return;
 
   imageIndex += Video::TargetWidth;
   video.vdp2ImagePtr[imageIndex] = video.vdp2ImagePtr[imageIndex + 1] = e0.color[2];
   video.vdp2ImagePtr[imageIndex + 2] = video.vdp2ImagePtr[imageIndex + 3] = e0.color[3];
 
-  if (y + 3 >= data.bottomY)
+  if (y + 3 >= m_stripData.bottomY)
     return;
 
   imageIndex += Video::TargetWidth;
@@ -189,20 +189,15 @@ void FilmStream::renderPixel1(FilmStream::StripData &data, uint8_t c0) {
   video.vdp2ImagePtr[imageIndex + 2] = video.vdp2ImagePtr[imageIndex + 3] = e0.color[3];
 }
 
-void FilmStream::renderPixel4(StripData &data, uint8_t c0, uint8_t c1, uint8_t c2, uint8_t c3) {
-  DEBUG_REQUIRE_LT(c0, 256);
-  DEBUG_REQUIRE_LT(c1, 256);
-  DEBUG_REQUIRE_LT(c2, 256);
-  DEBUG_REQUIRE_LT(c3, 256);
-
-  const Codebook555 *codebook = data.getV4Codebook555();
+void FilmStream::renderPixel4(uint8_t c0, uint8_t c1, uint8_t c2, uint8_t c3) {
+  const Codebook555 *codebook = m_stripData.getV4Codebook555();
   const Codebook555 &e0 = codebook[c0];
   const Codebook555 &e1 = codebook[c1];
   const Codebook555 &e2 = codebook[c2];
   const Codebook555 &e3 = codebook[c3];
 
-  const uint32_t x = data.writeX;
-  const uint32_t y = data.writeY;
+  const uint32_t x = m_stripData.writeX;
+  const uint32_t y = m_stripData.writeY;
 
   uint32_t imageIndex = ((video.startY + y) * Video::TargetWidth) + x;
   DEBUG_REQUIRE_LT(imageIndex, Video::TargetWidth * Video::TargetHeight);
@@ -216,7 +211,7 @@ void FilmStream::renderPixel4(StripData &data, uint8_t c0, uint8_t c1, uint8_t c
   // +------+------+------+------+
   // | e2y2 | e2y3 | e3y2 | e3y3 |
   // +------+------+------+------+
-  if (y + 0 >= data.bottomY)
+  if (y + 0 >= m_stripData.bottomY)
     return;
 
   video.vdp2ImagePtr[imageIndex++] = e0.color[0];
@@ -224,7 +219,7 @@ void FilmStream::renderPixel4(StripData &data, uint8_t c0, uint8_t c1, uint8_t c
   video.vdp2ImagePtr[imageIndex++] = e1.color[0];
   video.vdp2ImagePtr[imageIndex] = e1.color[1];
 
-  if (y + 1 >= data.bottomY)
+  if (y + 1 >= m_stripData.bottomY)
     return;
 
   imageIndex += Video::TargetWidth - 3;
@@ -233,7 +228,7 @@ void FilmStream::renderPixel4(StripData &data, uint8_t c0, uint8_t c1, uint8_t c
   video.vdp2ImagePtr[imageIndex++] = e1.color[2];
   video.vdp2ImagePtr[imageIndex] = e1.color[3];
 
-  if (y + 2 >= data.bottomY)
+  if (y + 2 >= m_stripData.bottomY)
     return;
 
   imageIndex += Video::TargetWidth - 3;
@@ -242,7 +237,7 @@ void FilmStream::renderPixel4(StripData &data, uint8_t c0, uint8_t c1, uint8_t c
   video.vdp2ImagePtr[imageIndex++] = e3.color[0];
   video.vdp2ImagePtr[imageIndex] = e3.color[1];
 
-  if (y + 3 >= data.bottomY)
+  if (y + 3 >= m_stripData.bottomY)
     return;
 
   imageIndex += Video::TargetWidth - 3;
@@ -252,7 +247,7 @@ void FilmStream::renderPixel4(StripData &data, uint8_t c0, uint8_t c1, uint8_t c
   video.vdp2ImagePtr[imageIndex] = e3.color[3];
 }
 
-void FilmStream::readVectors(StripData &data, uint16_t chunkDataLength) {
+void FilmStream::readVectors(uint16_t chunkDataLength) {
   uint32_t flags = read32();
   uint32_t remainingSectionBytes = chunkDataLength - 4;
 
@@ -263,7 +258,7 @@ void FilmStream::readVectors(StripData &data, uint16_t chunkDataLength) {
 
   uint8_t *tmpData = m_tmpBuffer;
   while (remainingSectionBytes) {
-    if (data.writeY >= data.bottomY) {
+    if (m_stripData.writeY >= m_stripData.bottomY) {
       break;
     }
 
@@ -275,7 +270,7 @@ void FilmStream::readVectors(StripData &data, uint16_t chunkDataLength) {
         }
 
         // V4
-        renderPixel4(data, tmpData[0], tmpData[1], tmpData[2], tmpData[3]);
+        renderPixel4(tmpData[0], tmpData[1], tmpData[2], tmpData[3]);
         remainingSectionBytes -= 4;
         tmpData += 4;
 
@@ -285,12 +280,12 @@ void FilmStream::readVectors(StripData &data, uint16_t chunkDataLength) {
         }
 
         // V1
-        renderPixel1(data, tmpData[0]);
+        renderPixel1(tmpData[0]);
         remainingSectionBytes -= 1;
         tmpData += 1;
       }
 
-      tmpStripData.skipBlock();
+      m_stripData.skipBlock();
       flags <<= 1;
     }
 
@@ -304,7 +299,9 @@ void FilmStream::readVectors(StripData &data, uint16_t chunkDataLength) {
   }
 }
 
-void FilmStream::readVectorsInter(StripData &data, uint16_t chunkDataLength) {
+void FilmStream::readVectorsInter(uint16_t chunkDataLength) {
+  DEBUG_REQUIRE_LT(chunkDataLength, m_tmpBufferSize);
+
   read(m_tmpBuffer, chunkDataLength);
   waitCopyingVideoFrame();
 
@@ -313,13 +310,13 @@ void FilmStream::readVectorsInter(StripData &data, uint16_t chunkDataLength) {
   // We keep reading flags as long as it is possible. We first read 4
   // bytes and then we start shifting them for the VLC. Once we reach
   // the end we try to read a new flag.
-  uint32_t flags = *((uint32_t *) m_tmpBuffer);
+  uint32_t flags = *reinterpret_cast<uint32_t *>(m_tmpBuffer);
 
   uint8_t *tmpData = m_tmpBuffer + 4;
   uint32_t shifts = 0;
   while (remainingSectionBytes) {
     DEBUG_REQUIRE_LE(shifts, 31);
-    if (data.writeY >= data.bottomY) {
+    if (m_stripData.writeY >= m_stripData.bottomY) {
       break;
     }
 
@@ -352,7 +349,7 @@ void FilmStream::readVectorsInter(StripData &data, uint16_t chunkDataLength) {
         }
 
         // V4
-        renderPixel4(data, tmpData[0], tmpData[1], tmpData[2], tmpData[3]);
+        renderPixel4(tmpData[0], tmpData[1], tmpData[2], tmpData[3]);
         tmpData += 4;
         remainingSectionBytes -= 4;
       } else {
@@ -361,13 +358,13 @@ void FilmStream::readVectorsInter(StripData &data, uint16_t chunkDataLength) {
         }
 
         // V1
-        renderPixel1(data, tmpData[0]);
+        renderPixel1(tmpData[0]);
         tmpData += 1;
         remainingSectionBytes -= 1;
       }
     }
 
-    tmpStripData.skipBlock();
+    m_stripData.skipBlock();
 
     // If we read all the bits, we just fetch the next flags.
     if (shifts == 31) {
@@ -388,24 +385,24 @@ void FilmStream::readVectorsInter(StripData &data, uint16_t chunkDataLength) {
   }
 }
 
-void FilmStream::readV1VectorsInChunk(StripData &data, uint16_t chunkDataLength) {
+void FilmStream::readV1VectorsInChunk(uint16_t chunkDataLength) {
   uint32_t readBytes = 0;
-  uint16_t originalWriteX = tmpStripData.writeX;
-  uint16_t originalWriteY = tmpStripData.writeY;
+  uint16_t originalWriteX = m_stripData.writeX;
+  uint16_t originalWriteY = m_stripData.writeY;
 
   uint32_t remainingSectionBytes = chunkDataLength;
   while (remainingSectionBytes) {
-    if (data.writeY >= data.bottomY) {
+    if (m_stripData.writeY >= m_stripData.bottomY) {
       break;
     }
 
     ++readBytes;
     --remainingSectionBytes;
-    tmpStripData.skipBlock();
+    m_stripData.skipBlock();
   }
 
-  tmpStripData.writeX = originalWriteX;
-  tmpStripData.writeY = originalWriteY;
+  m_stripData.writeX = originalWriteX;
+  m_stripData.writeY = originalWriteY;
 
   waitCopyingVideoFrame();
 
@@ -415,8 +412,8 @@ void FilmStream::readV1VectorsInChunk(StripData &data, uint16_t chunkDataLength)
     read(m_tmpBuffer, readNow);
     for (volatile uint32_t i = 0; i < readNow; ++i) {
       const uint8_t c0 = m_tmpBuffer[i];
-      renderPixel1(data, c0);
-      tmpStripData.skipBlock();
+      renderPixel1(c0);
+      m_stripData.skipBlock();
     }
 
     readBytes -= readNow;
@@ -427,7 +424,7 @@ void FilmStream::readV1VectorsInChunk(StripData &data, uint16_t chunkDataLength)
   }
 }
 
-void FilmStream::readChunk(uint16_t chunkID, uint16_t chunkDataLength, StripData &data) {
+void FilmStream::readChunk(uint16_t chunkID, uint16_t chunkDataLength) {
   DEBUG_REQUIRE_EQ(chunkDataLength % 2, 0);
 
   // If we are still copying the blocks.
@@ -437,34 +434,39 @@ void FilmStream::readChunk(uint16_t chunkID, uint16_t chunkDataLength, StripData
   // 12 bit V4 (0x2000) or V1(0x2200)
   case 0x2000:
   case 0x2200: {
-    DEBUG_REQUIRE_LT(data.strip, FilmStream::StripData::MaxStrips);
+    DEBUG_REQUIRE_LT(m_stripData.strip, FilmStream::StripData::MaxStrips);
+
+    // Start DIVU
+    uint32_t remainingSectionBytes = chunkDataLength;
+    cpu_divu_32_32_set(remainingSectionBytes, sizeof(Codebook));
 
     Codebook *codebookPtr;
     Codebook555 *codebook555Ptr;
     if (chunkID == 0x2000) {
-      codebookPtr = data.getV4Codebook();
-      codebook555Ptr = data.getV4Codebook555();
+      codebookPtr = m_stripData.getV4Codebook();
+      codebook555Ptr = m_stripData.getV4Codebook555();
     } else {
-      codebookPtr = data.getV1Codebook();
-      codebook555Ptr = data.getV1Codebook555();
+      codebookPtr = m_stripData.getV1Codebook();
+      codebook555Ptr = m_stripData.getV1Codebook555();
     }
 
     DEBUG_REQUIRE_NE(codebookPtr, nullptr);
     DEBUG_REQUIRE_NE(codebook555Ptr, nullptr);
 
-    uint32_t remainingSectionBytes = chunkDataLength;
-
-    const uint32_t numReads = remainingSectionBytes / 6;
-    const uint32_t numReadBytes = numReads * 6;
-
+    const uint32_t numReads = cpu_divu_quotient_get();
+    const uint32_t numReadBytes = numReads * sizeof(Codebook);
     DEBUG_REQUIRE_LE(numReadBytes, sizeof(Codebook) * 256);
-    read(codebookPtr, numReadBytes);
+
+    // TODO: Opt
+    // read(codebookPtr, numReadBytes);
 
     for (uint32_t i = 0; i < numReads; ++i) {
+      read(&codebookPtr[i], sizeof(Codebook));
       codebook555Ptr[i].create(codebookPtr[i]);
     }
 
     remainingSectionBytes -= numReadBytes;
+    DEBUG_REQUIRE_EQ(remainingSectionBytes, 0);
 
     // Deviant format shenanigans
     if (remainingSectionBytes) {
@@ -475,16 +477,16 @@ void FilmStream::readChunk(uint16_t chunkID, uint16_t chunkDataLength, StripData
   // 12 bit V4 (0x2100) or V1 (0x2300) - Update only
   case 0x2100:
   case 0x2300: {
-    DEBUG_REQUIRE_LT(data.strip, FilmStream::StripData::MaxStrips);
+    DEBUG_REQUIRE_LT(m_stripData.strip, FilmStream::StripData::MaxStrips);
 
     Codebook *codebookPtr;
     Codebook555 *codebook555Ptr;
     if (chunkID == 0x2100) {
-      codebookPtr = data.getV4Codebook();
-      codebook555Ptr = data.getV4Codebook555();
+      codebookPtr = m_stripData.getV4Codebook();
+      codebook555Ptr = m_stripData.getV4Codebook555();
     } else {
-      codebookPtr = data.getV1Codebook();
-      codebook555Ptr = data.getV1Codebook555();
+      codebookPtr = m_stripData.getV1Codebook();
+      codebook555Ptr = m_stripData.getV1Codebook555();
     }
 
     DEBUG_REQUIRE_NE(codebookPtr, nullptr);
@@ -525,16 +527,16 @@ void FilmStream::readChunk(uint16_t chunkID, uint16_t chunkDataLength, StripData
 
   // vectors
   case 0x3000:
-    readVectors(data, chunkDataLength);
+    readVectors(chunkDataLength);
     break;
 
   // list of blocks from v1
   case 0x3100:
-    readVectorsInter(data, chunkDataLength);
+    readVectorsInter(chunkDataLength);
     break;
 
   case 0x3200:
-    readV1VectorsInChunk(data, chunkDataLength);
+    readV1VectorsInChunk(chunkDataLength);
     break;
 
   default: {
@@ -547,8 +549,7 @@ void FilmStream::readChunk(uint16_t chunkID, uint16_t chunkDataLength, StripData
     sprintf((char *) LWRAM(80), "Unknown chunk id 0x%X at offset %d\n", chunkID, chunkIdPos);
 
     DEBUG_REQUIRE(false);
-    break;
-  }
+  } break;
   }
 }
 
@@ -572,8 +573,8 @@ void FilmStream::parseVideo(const Sample &sample) {
     // Execute division on DIV-U and then check for the mod operation if needed.
     uint32_t remainder = 0;
     if (length != m_stabChunk.length) {
-      const fix16_t divisionResult = fix16_div(m_stabChunk.length, length);
-      remainder = m_stabChunk.length - divisionResult * length;
+      cpu_divu_32_32_set(m_stabChunk.length, length);
+      remainder = cpu_divu_remainder_get();
     }
 
     if (remainder != 0) {
@@ -603,11 +604,12 @@ void FilmStream::parseVideo(const Sample &sample) {
 
   uint16_t lastBottomY = 0;
   for (uint16_t stripId = 0; stripId < cvidHeader.numCodedStrips; ++stripId) {
-    tmpStripData.strip = stripId;
+    m_stripData.strip = stripId;
 
     // flag bit 0 will tell if we need the contents of the previous strip
     if (stripId > 0 && copyLastCodeBooks) {
-      tmpStripData.copyLastCodebooksNoDMA();
+      m_stripData.copyLastCodebooksNoDMA();
+      // m_stripData.copyLastCodebooks();
     }
 
     StripHeader stripHeader;
@@ -627,19 +629,19 @@ void FilmStream::parseVideo(const Sample &sample) {
       read(&stripHeader, sizeof(StripHeader));
     }
 
-    tmpStripData.topY = tmpStripData.writeY = stripHeader.topY;
-    tmpStripData.topX = tmpStripData.writeX = stripHeader.topX;
-    tmpStripData.bottomY = stripHeader.bottomY;
-    tmpStripData.bottomX = stripHeader.bottomX;
+    m_stripData.topY = m_stripData.writeY = stripHeader.topY;
+    m_stripData.topX = m_stripData.writeX = stripHeader.topX;
+    m_stripData.bottomY = stripHeader.bottomY;
+    m_stripData.bottomX = stripHeader.bottomX;
 
-    if (stripId > 0 && tmpStripData.topY == 0) {
-      tmpStripData.topY = tmpStripData.writeY = lastBottomY;
-      tmpStripData.bottomY += lastBottomY;
+    if (stripId > 0 && m_stripData.topY == 0) {
+      m_stripData.topY = m_stripData.writeY = lastBottomY;
+      m_stripData.bottomY += lastBottomY;
     }
 
     // Read the strip chunks
     const uint32_t stripLimit = getOffset() + stripHeader.dataSize - sizeof(StripHeader);
-    lastBottomY = tmpStripData.bottomY;
+    lastBottomY = m_stripData.bottomY;
 
     while (getOffset() < stripLimit) {
       const uint16_t cvidChunkID = read16();
@@ -647,7 +649,7 @@ void FilmStream::parseVideo(const Sample &sample) {
 
       [[maybe_unused]] const size_t expectedEnd = getOffset() + cvidChunkDataLength;
       if (cvidChunkDataLength) {
-        readChunk(cvidChunkID, cvidChunkDataLength, tmpStripData);
+        readChunk(cvidChunkID, cvidChunkDataLength);
       }
 
       DEBUG_REQUIRE_EQ(getOffset(), expectedEnd);
@@ -699,11 +701,12 @@ void FilmStream::parseSample(const Sample &sample) {
   }
 }
 
-void FilmStream::play() {
+void FilmStream::play(cdfs_filelist_entry_t *fileListEntry) {
   Console::clear();
-  initializeFilm();
 
-  tmpStripData.create();
+  initialize(fileListEntry);
+  initializeFilm();
+  m_stripData.create();
 
   read(&m_header, sizeof(Header));
   DEBUG_REQUIRE_EQ(m_header.signature, ASCII_FILM);
@@ -749,7 +752,6 @@ void FilmStream::play() {
   // processing sounds
   // film_audio_prepare_to_play();
 
-  // Statistics
   [[maybe_unused]] uint32_t samplesInSec = 0;
   [[maybe_unused]] uint32_t minSamplesInSec = 0xFFFFFFFF;
   [[maybe_unused]] uint32_t samplesInSecCount = 0;
@@ -758,9 +760,6 @@ void FilmStream::play() {
   [[maybe_unused]] uint32_t playTime = 0;
 
   // FILM timing
-  const yaul::fix16 baseFrequencyMultiplier =
-    yaul::fix16::from_int(1000) / yaul::fix16::from_int(m_stabChunk.frameRateBaseFrequencyHz);
-
   Timer frameTimer;
   for (uint32_t sampleId = 0; sampleId < numSamples; ++sampleId) {
     if (!m_loopCallback()) {
@@ -770,42 +769,43 @@ void FilmStream::play() {
     Sample sample = getNextSample();
     frameTimer.reset();
 
-    const yaul::fix16 timeToNextFrameMs16 = yaul::fix16::from_int(sample.info2) * baseFrequencyMultiplier;
-    const uint32_t timeToNextFrameMs = static_cast<uint32_t>(timeToNextFrameMs16.to_int());
-
-    Console::printf_flush("Sample is audio %d\n", sample.isAudio());
+    DEBUG_REQUIRE_LT(sample.info2, INT32_MAX / 1000);
+    cpu_divu_32_32_set(1000 * sample.info2, m_stabChunk.frameRateBaseFrequencyHz);
+    const uint32_t timeToNextFrameMs = cpu_divu_quotient_get();
 
     parseSample(sample);
 
-    ++samplesInSecCount;
-    bytesInSecCount += sample.length;
+    if constexpr (ShowStatistics) {
+      ++samplesInSecCount;
+      bytesInSecCount += sample.length;
+    }
 
     // Wait until we can proccess next frame due to pending interval
-    /*
-    while (sample.isVideo() && (frameTimer.count() < timeToNextFrameMs)) {
-      cpu_instr_nop();
-    }
+    // while (sample.isVideo() && (frameTimer.count() < timeToNextFrameMs)) {
+    //   cpu_instr_nop();
+    // }
 
     if (sample.isVideo()) {
       const uint32_t delta = video.startY * Video::TargetWidth;
       copyVideoFrame(delta);
     }
-    */
 
-    Console::clear();
-    Console::printf_flush("Play Time %d\n"
-                          "Frame %d\n"
-                          "SamplesInSec: %d\n"
-                          "BytesInSec: %d\n"
-                          "LastBytesInSec: %d\n"
-                          "Audio: %c / %d bits / %d Hz\n"
-                          "NumPlayedSamples: %d\n"
-                          "TickRate: %d Hz\n",
-      playTime, m_sampleCacheIndex, samplesInSec, bytesInSecCount, lastBytesInSecCount,
-      m_fdscChunk.audioChannels == 1 ? 'M' : 'S', m_fdscChunk.audioResolution, m_fdscChunk.frequencyHz,
-      audio.numPlayedSamples, framerateBaseFrequencyHz);
+    if constexpr (ShowStatistics) {
+      Console::clear();
+      Console::printf("Play Time %d\n"
+                      "Frame %d\n"
+                      "SamplesInSec: %d\n"
+                      "BytesInSec: %d\n"
+                      "LastBytesInSec: %d\n"
+                      "Audio: %c / %d bits / %d Hz\n"
+                      "NumPlayedSamples: %d\n"
+                      "TickRate: %d Hz\n",
+        playTime, m_sampleCacheIndex, samplesInSec, bytesInSecCount, lastBytesInSecCount,
+        m_fdscChunk.audioChannels == 1 ? 'M' : 'S', m_fdscChunk.audioResolution, m_fdscChunk.frequencyHz,
+        audio.numPlayedSamples, framerateBaseFrequencyHz);
+    }
   }
 
-  const int status __unused = cd_block_cmd_data_transfer_end();
+  [[maybe_unused]] const int status = cd_block_cmd_data_transfer_end();
   DEBUG_REQUIRE_EQ(status, 0);
 }

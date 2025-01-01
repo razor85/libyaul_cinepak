@@ -15,11 +15,12 @@
  */
 class StreamFile {
 private:
-  uint32_t m_startFAD;
-  uint32_t m_size;
-  uint32_t m_remainingSectors;
-  uint32_t m_dataAvailable;
-  uint32_t m_offset;
+  bool m_initialized{false};
+  uint32_t m_startFAD{0};
+  uint32_t m_size{0};
+  uint32_t m_remainingSectors{0};
+  uint32_t m_dataAvailable{0};
+  uint32_t m_offset{0};
 
   static uint32_t numSectorsForSize(uint32_t size) {
     // Past size so we get the complete number of sectors for the whole data.
@@ -97,6 +98,7 @@ private:
   }
 
   void triggerDataRequest() {
+    DEBUG_REQUIRE(m_initialized);
     DEBUG_REQUIRE_NE(m_remainingSectors, 0);
 
     // End previous transfers
@@ -133,9 +135,20 @@ private:
   }
 
 public:
-  StreamFile(cdfs_filelist_entry_t *entry) {
+  StreamFile() = default;
+
+  ~StreamFile() {
+    if (m_initialized) {
+      cd_block_cmd_data_transfer_end();
+    }
+  }
+
+  void initialize(cdfs_filelist_entry_t *entry) {
+    DEBUG_REQUIRE(!m_initialized);
+
     Console::printf_flush("%s (%d bytes), FAD: %d\n", entry->name, entry->size, entry->starting_fad);
 
+    m_initialized = true;
     queueDiskRead(entry->starting_fad, entry->size);
 
     m_startFAD = entry->starting_fad;
@@ -159,31 +172,27 @@ public:
     m_remainingSectors -= sectorsReady;
   }
 
-  ~StreamFile() { cd_block_cmd_data_transfer_end(); }
-
   void read(volatile void *tmpDestPtr, uint32_t len) {
+    DEBUG_REQUIRE(m_initialized);
+    DEBUG_REQUIRE_NE(tmpDestPtr, 0);
     DEBUG_REQUIRE_EQ(len % 2, 0);
     DEBUG_REQUIRE_LE(m_offset + len, m_size);
 
-    static volatile uint16_t *cdData = (volatile uint16_t *) CD_BLOCK_TRANSFER_REGISTER;
-
-    volatile uint16_t *destPtr = (volatile uint16_t *) tmpDestPtr;
-    DEBUG_REQUIRE_NE(destPtr, 0);
+    volatile uint16_t *destPtr = reinterpret_cast<volatile uint16_t *>(tmpDestPtr);
 
     uint32_t remainingBytes = len;
     while (remainingBytes) {
       if (!m_dataAvailable)
         triggerDataRequest();
 
-      const uint32_t readSize = min<uint32_t>(m_dataAvailable, remainingBytes);
+      const uint32_t readSize = min(m_dataAvailable, remainingBytes);
       const uint32_t readSizeLoop = readSize >> 1;
       DEBUG_REQUIRE_EQ(readSize % 2, 0);
 
       m_dataAvailable -= readSize;
       remainingBytes -= readSize;
-
       for (volatile uint32_t i = 0; i < readSizeLoop; ++i) {
-        *destPtr++ = MEMORY_READ(16, cdData);
+        *destPtr++ = MEMORY_READ(16, CD_BLOCK_TRANSFER_REGISTER);
       }
     }
 
@@ -195,17 +204,16 @@ public:
       return;
     }
 
+    DEBUG_REQUIRE(m_initialized);
     DEBUG_REQUIRE_EQ(len % 2, 0);
     DEBUG_REQUIRE_LE(m_offset + len, m_size);
-
-    static volatile uint16_t *cdData = (volatile uint16_t *) CD_BLOCK_TRANSFER_REGISTER;
 
     uint32_t remainingBytes = len;
     while (remainingBytes) {
       if (!m_dataAvailable)
         triggerDataRequest();
 
-      const uint32_t readSize = min<uint32_t>(m_dataAvailable, remainingBytes);
+      const uint32_t readSize = min(m_dataAvailable, remainingBytes);
       const uint32_t readSizeLoop = readSize >> 1;
       DEBUG_REQUIRE_EQ(readSize % 2, 0);
 
@@ -213,7 +221,7 @@ public:
       remainingBytes -= readSize;
 
       for (volatile uint32_t i = 0; i < readSizeLoop; ++i) {
-        MEMORY_READ(16, cdData);
+        MEMORY_READ(16, CD_BLOCK_TRANSFER_REGISTER);
       }
     }
 
@@ -221,18 +229,24 @@ public:
   }
 
   uint16_t read16() {
-    volatile uint16_t data;
+    DEBUG_REQUIRE(m_initialized);
+
+    uint16_t data;
     read(&data, 2);
 
     return data;
   }
 
   uint32_t read32() {
-    volatile uint32_t data;
+    DEBUG_REQUIRE(m_initialized);
+
+    uint32_t data;
     read(&data, 4);
 
     return data;
   }
+
+  [[nodiscard]] bool isInitialized() { return m_initialized; }
 
   [[nodiscard]] uint32_t getStartFAD() { return m_startFAD; }
 

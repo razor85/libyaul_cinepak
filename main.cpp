@@ -5,9 +5,11 @@
 
 namespace {
 
-void vblankInHandler(void *) {}
-
-void vblankOutHandler(void *) { smpc_peripheral_intback_issue(); }
+// Forward Declaration
+void filmInitCallback();
+bool filmLoopCallback();
+void vblankInHandler(void *);
+void vblankOutHandler(void *);
 
 smpc_peripheral_digital_t pad0;
 cdfs_filelist_t cdFiles;
@@ -18,7 +20,7 @@ uint8_t tmpBuffer[TmpBufferSize];
 constexpr uint32_t SampleCacheNumSamples{20000};
 FilmStream::Sample sampleCache[SampleCacheNumSamples];
 
-} // namespace
+FilmStream film(tmpBuffer, TmpBufferSize, sampleCache, SampleCacheNumSamples, &filmInitCallback, &filmLoopCallback);
 
 void filmInitCallback() {}
 
@@ -33,6 +35,12 @@ bool filmLoopCallback() {
 
   return true;
 }
+
+void vblankInHandler(void *) {}
+
+void vblankOutHandler(void *) { smpc_peripheral_intback_issue(); }
+
+} // namespace
 
 /*
 uint32_t film_audio_get_next_buffer_size() {
@@ -172,10 +180,7 @@ int main() {
       Console::clear();
       dbgio_flush();
 
-      FilmStream film(movieEntries[menuSelection], tmpBuffer, TmpBufferSize, sampleCache, SampleCacheNumSamples,
-        &filmInitCallback, &filmLoopCallback);
-
-      film.play();
+      film.play(movieEntries[menuSelection]);
 
       movieSelected = false;
 
@@ -280,9 +285,6 @@ void user_init(void) {
   vdp_sync_vblank_in_set(vblankInHandler, NULL);
   vdp_sync_vblank_out_set(vblankOutHandler, NULL);
 
-  cpu_frt_init(CPU_FRT_CLOCK_DIV_128);
-  cpu_frt_interrupt_priority_set(15);
-
   smpc_peripheral_init();
 
   dbgio_init();
@@ -291,6 +293,6 @@ void user_init(void) {
 
   vdp2_tvmd_display_set();
 
-  // Improve performance by ignoring HBLANK IN
-  scu_ic_mask_chg(SCU_IC_MASK_ALL, SCU_IC_MASK_HBLANK_IN);
+  // TODO: Improve performance by ignoring HBLANK IN
+  // scu_ic_mask_chg(SCU_IC_MASK_ALL, SCU_IC_MASK_HBLANK_IN);
 }

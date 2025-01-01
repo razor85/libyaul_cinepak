@@ -29,6 +29,8 @@ public:
     uint32_t unknown;
   } __packed;
 
+  static_assert(sizeof(Header) == 16);
+
   struct FdscChunk {
     uint32_t fdsc;
     uint32_t length;
@@ -43,12 +45,16 @@ public:
     uint8_t padding1[6]; // Guess
   } __packed;
 
+  static_assert(sizeof(FdscChunk) == 32);
+
   struct StabChunk {
     uint32_t stab;
     uint32_t length;
     uint32_t frameRateBaseFrequencyHz;
     uint32_t numEntriesSampleTable;
   } __packed;
+
+  static_assert(sizeof(StabChunk) == 16);
 
   // A sample stored in the STAB table is:
   struct Sample {
@@ -60,6 +66,8 @@ public:
     [[nodiscard]] bool isVideo() const { return !isAudio(); }
   } __packed;
 
+  static_assert(sizeof(Sample) == 16);
+
   struct StripHeader {
     uint16_t cvidId;
     uint16_t dataSize;
@@ -69,7 +77,7 @@ public:
     uint16_t bottomX;
   } __packed;
 
-  static_assert(sizeof(StripHeader) == 12, "sizeof(StripHeader) != 12");
+  static_assert(sizeof(StripHeader) == 12);
 
   struct Codebook {
     uint8_t y[4];
@@ -79,7 +87,7 @@ public:
     void create(FilmStream &file);
   } __packed;
 
-  static_assert(sizoef(Codebook) == 6, "sizeof(Codebook) != 6");
+  static_assert(sizeof(Codebook) == 6);
 
   struct Codebook555 {
     uint16_t color[4];
@@ -87,12 +95,16 @@ public:
     void create(Codebook &book);
   } __packed;
 
+  static_assert(sizeof(Codebook555) == 8);
+
   struct StripCodebook {
     Codebook v1[256];
     Codebook v4[256];
     Codebook555 v1RGB[256];
     Codebook555 v4RGB[256];
   };
+
+  static_assert(sizeof(StripCodebook) == (256 * 2 * sizeof(Codebook) + 256 * 2 * sizeof(Codebook555)));
 
   struct StripData {
     static constexpr uint32_t MaxStrips = 16;
@@ -125,6 +137,7 @@ public:
       if (writeX >= bottomX) {
         writeX = topX;
         writeY += 4;
+        DEBUG_REQUIRE_LE(writeY, bottomY);
       }
     }
 
@@ -145,6 +158,8 @@ public:
     uint16_t numCodedStrips;
   } __packed;
 
+  static_assert(sizeof(VideoHeader) == 10);
+
 private:
   void createCache();
 
@@ -155,29 +170,28 @@ private:
     return m_sampleCache[m_sampleCacheIndex++];
   }
 
-  void renderPixel1(StripData &data, uint8_t c0);
-  void renderPixel4(StripData &data, uint8_t c0, uint8_t c1, uint8_t c2, uint8_t c3);
-  void readVectors(StripData &data, uint16_t chunkDataLength);
-  void readVectorsInter(StripData &data, uint16_t chunkDataLength);
-  void readV1VectorsInChunk(StripData &data, uint16_t chunkDataLength);
-  void readChunk(uint16_t chunkID, uint16_t chunkDataLength, StripData &data);
+  void renderPixel1(uint8_t c0);
+  void renderPixel4(uint8_t c0, uint8_t c1, uint8_t c2, uint8_t c3);
+  void readVectors(uint16_t chunkDataLength);
+  void readVectorsInter(uint16_t chunkDataLength);
+  void readV1VectorsInChunk(uint16_t chunkDataLength);
+  void readChunk(uint16_t chunkID, uint16_t chunkDataLength);
   void parseVideo(const Sample &sample);
   void parseAudio(const Sample &sample);
   void parseSample(const Sample &sample);
 
 public:
-  FilmStream(cdfs_filelist_entry_t *fileListEntry, uint8_t *tmpBuffer, uint32_t tmpBufferSize, Sample *sampleCache,
-    uint32_t sampleCacheCapacity, InitializeCallback initializeCallback = &FilmStream::EmptyInitializeCallback,
+  FilmStream(uint8_t *tmpBuffer, uint32_t tmpBufferSize, Sample *sampleCache, uint32_t sampleCacheCapacity,
+    InitializeCallback initializeCallback = &FilmStream::EmptyInitializeCallback,
     LoopCallback loopCallback = &FilmStream::EmptyLoopCallback)
-      : StreamFile(fileListEntry)
-      , m_initializeCallback(initializeCallback)
+      : m_initializeCallback(initializeCallback)
       , m_loopCallback(loopCallback)
       , m_tmpBuffer(tmpBuffer)
       , m_tmpBufferSize(tmpBufferSize)
       , m_sampleCache(sampleCache)
       , m_sampleCacheCapacity(sampleCacheCapacity) {}
 
-  void play();
+  void play(cdfs_filelist_entry_t *fileListEntry);
 
 private:
   InitializeCallback m_initializeCallback{nullptr};
@@ -187,6 +201,7 @@ private:
   const uint32_t m_tmpBufferSize{0};
 
   Optional<uint32_t> m_cvidHeaderPadding;
+  StripData m_stripData;
 
   Header m_header{};
   FdscChunk m_fdscChunk{};

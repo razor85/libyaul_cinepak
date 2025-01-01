@@ -6,7 +6,7 @@
 
 namespace {
 
-vdp1_vram_partitions* getVRAMPartitions() {
+vdp1_vram_partitions *getVRAMPartitions() {
   static vdp1_vram_partitions partitions;
   static bool initialized = false;
   if (!initialized)
@@ -15,8 +15,7 @@ vdp1_vram_partitions* getVRAMPartitions() {
   return &partitions;
 }
 
-} // namespace ''
-
+} // namespace
 
 StringStream &StringStream::operator<<(bool n) {
   const uint32_t chars = snprintf(mTmpBuffer, 64, "%d", n);
@@ -26,12 +25,12 @@ StringStream &StringStream::operator<<(bool n) {
 }
 
 StringStream &StringStream::operator<<(unsigned char n) {
-  addToBuffer(reinterpret_cast<const char*>(&n), 1);
+  addToBuffer(reinterpret_cast<const char *>(&n), 1);
   return *this;
 }
 
 StringStream &StringStream::operator<<(char n) {
-  addToBuffer(reinterpret_cast<const char*>(&n), 1);
+  addToBuffer(reinterpret_cast<const char *>(&n), 1);
   return *this;
 }
 
@@ -115,21 +114,17 @@ void StringStream::addToBuffer(const char *input, uint32_t len) {
 const char *StringStream::buffer() const { return mBuffer; }
 
 // Store debug messages
-char DebugBuffer::msg[ 256 ];
-  
-void DebugBuffer::print() {
-  print(msg);
-}
+char DebugBuffer::msg[256];
 
-void DebugBuffer::printInLoop() {
-  dbgio_printf(msg);
-}
+void DebugBuffer::print() { print(msg); }
 
-void DebugBuffer::print(const char* newMsg) {
+void DebugBuffer::printInLoop() { dbgio_printf(msg); }
+
+void DebugBuffer::print(const char *newMsg) {
   dbgio_printf(newMsg);
   dbgio_flush();
 }
-  
+
 void DebugBuffer::printv(const char *format, ...) {
   va_list arguments;
   va_start(arguments, format);
@@ -140,9 +135,7 @@ void DebugBuffer::printv(const char *format, ...) {
   dbgio_flush();
 }
 
-
 namespace Memory {
-
 
 // Declare static data.
 user_tlsf_t Low::tlsfHandle = nullptr;
@@ -157,41 +150,35 @@ uint32_t DRAM::usedMemory = 0;
 uint32_t DRAM::totalMemory = 0;
 
 uint32_t getOffsetInCmdRAM(uint32_t offset) {
-  static const uint32_t vram = 
-    reinterpret_cast<uint32_t>(getVRAMPartitions()->cmdt_base) - VDP1_VRAM(32);
+  static const uint32_t vram = reinterpret_cast<uint32_t>(getVRAMPartitions()->cmdt_base) - VDP1_VRAM(32);
 
   return vram + offset;
 }
 
 uint32_t getOffsetInTextureRAM(uint32_t offset) {
-  static const uint32_t vram = 
-    reinterpret_cast<uint32_t>(getVRAMPartitions()->texture_base) - VDP1_VRAM(0);
+  static const uint32_t vram = reinterpret_cast<uint32_t>(getVRAMPartitions()->texture_base) - VDP1_VRAM(0);
 
   return vram + offset;
 }
 
 uint32_t getOffsetInGouraudRAM(uint32_t offset) {
-  static const uint32_t vram =
-    reinterpret_cast<uint32_t>(getVRAMPartitions()->gouraud_base) - VDP1_VRAM(0);
+  static const uint32_t vram = reinterpret_cast<uint32_t>(getVRAMPartitions()->gouraud_base) - VDP1_VRAM(0);
 
   return vram + offset;
 }
 
-void libAssert(const char* file, int line, const char* msg) {
+void libAssert(const char *file, int line, const char *msg) {
 #ifndef SATURN_SIMULATOR
-  __asm__ volatile (
-    "mov #4294967295, r12\n"
-    "mov #4294967295, r13\n"
-  );
+  __asm__ volatile("mov #4294967295, r12\n"
+                   "mov #4294967295, r13\n");
 #endif
 
   if (msg != nullptr) {
-    Console::clear();
+    // Console::clear();
     dbgio_printf("\n\n%s\n\n", msg);
   } else {
-    Console::clear();
-    dbgio_printf(DebugBuffer::buffer(), "Assertion failed at %s:%d\n\n", file,
-      line);
+    // Console::clear();
+    dbgio_printf(DebugBuffer::buffer(), "Assertion failed at %s:%d\n\n", file, line);
   }
 
   // Keep program running.
@@ -205,4 +192,3 @@ void libAssert(const char* file, int line, const char* msg) {
 void runTests() { Memory::Low::runTests(); }
 
 } // namespace Memory
-

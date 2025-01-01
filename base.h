@@ -17,7 +17,6 @@
 #endif
 
 #define DEBUG_FUNCTIONS_ON
-#define DEBUG_STATS
 
 #ifdef min
 #  undef min
