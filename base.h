@@ -119,9 +119,9 @@ public:
 
 template <typename T>
 static void swap(T &a, T &b) noexcept {
-  const T tmp{a};
-  a = b;
-  b = tmp;
+  T temp = std::move(a);
+  a = std::move(b);
+  b = std::move(temp);
 }
 
 template <typename TA, typename TB>

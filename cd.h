@@ -4,9 +4,6 @@
 #include "base.h"
 #include "memory.h"
 
-#define HIRQ 0x0008UL
-#define DRDY 0x0002 /* Data transfer preparations complete */
-
 // Read 2 bytes from register
 #define CD_BLOCK_TRANSFER_REGISTER 0x25890000UL
 
@@ -15,12 +12,31 @@
  */
 class StreamFile {
 private:
+  static constexpr uint32_t SectorsToPreload = 4;
+
   bool m_initialized{false};
   uint32_t m_startFAD{0};
   uint32_t m_size{0};
   uint32_t m_remainingSectors{0};
   uint32_t m_dataAvailable{0};
   uint32_t m_offset{0};
+
+  static void waitFlagIRQ(uint16_t flag) {
+    constexpr uint32_t cdBlockIRQ = CD_BLOCK(0x0008UL);
+    for (volatile uint32_t i = 0; i < 240000; ++i) {
+      if (MEMORY_READ(16, cdBlockIRQ) & flag) {
+        return;
+      }
+    }
+
+    DEBUG_REQUIRE(false);
+  }
+
+  static void waitCpuCycles(uint32_t cycles) {
+    for (volatile uint32_t i = 0; i < cycles; ++i) {
+      cpu_instr_nop();
+    }
+  }
 
   static uint32_t numSectorsForSize(uint32_t size) {
     // Past size so we get the complete number of sectors for the whole data.
@@ -70,16 +86,8 @@ private:
   }
 
   static void waitUntilCdDataIsAvailable() {
-    // Wait until data is available
-    [[maybe_unused]] bool ready = false;
-    for (volatile uint32_t i = 0; i < 240000; ++i) {
-      if (MEMORY_READ(16, CD_BLOCK(HIRQ)) & DRDY) {
-        ready = true;
-        break;
-      }
-    }
-
-    DEBUG_REQUIRE(ready);
+    constexpr uint16_t flagDRDY = 0x0002;
+    waitFlagIRQ(flagDRDY);
   }
 
   static void queueDiskRead(uint32_t fad, uint32_t size) {
@@ -105,33 +113,22 @@ private:
     [[maybe_unused]] int status = cd_block_cmd_data_transfer_end();
     DEBUG_REQUIRE_EQ(status, 0);
 
-    const uint32_t sectorsReady = getSectorsReady(min<uint32_t>(m_remainingSectors, 8));
+    const uint32_t sectorsReady = getSectorsReady(min<uint32_t>(m_remainingSectors, SectorsToPreload));
     DEBUG_REQUIRE_GT(sectorsReady, 0);
 
-    while (true) {
+    status = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
+
+    // Set those anyway while we wait for the cdblock to respond
+    m_dataAvailable = sectorsReady * CDFS_SECTOR_SIZE;
+    m_remainingSectors -= sectorsReady;
+
+    while (status & CD_STATUS_WAIT) {
+      waitCpuCycles(4096);
       status = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
-      if (status & CD_STATUS_WAIT) {
-        for (volatile uint32_t i = 0; i < 4096; ++i) {
-          cpu_instr_nop();
-        }
-      } else {
-        break;
-      }
     }
 
     // Wait until data is available
-    [[maybe_unused]] bool ready = false;
-    for (volatile uint32_t i = 0; i < 240000; ++i) {
-      if (MEMORY_READ(16, CD_BLOCK(HIRQ)) & DRDY) {
-        ready = true;
-        break;
-      }
-    }
-
-    DEBUG_REQUIRE(ready);
-
-    m_dataAvailable = sectorsReady * CDFS_SECTOR_SIZE;
-    m_remainingSectors -= sectorsReady;
+    waitUntilCdDataIsAvailable();
   }
 
 public:
@@ -144,7 +141,9 @@ public:
   }
 
   void initialize(cdfs_filelist_entry_t *entry) {
-    DEBUG_REQUIRE(!m_initialized);
+    if (m_initialized) {
+      cd_block_cmd_data_transfer_end();
+    }
 
     Console::printf_flush("%s (%d bytes), FAD: %d\n", entry->name, entry->size, entry->starting_fad);
 
@@ -158,8 +157,7 @@ public:
     m_offset = 0;
 
     // Fetch first sectors
-    const uint32_t sectorsReady = getSectorsReady(min<uint32_t>(m_remainingSectors, 8));
-
+    const uint32_t sectorsReady = getSectorsReady(min<uint32_t>(m_remainingSectors, SectorsToPreload));
     DEBUG_REQUIRE_GT(sectorsReady, 0);
 
     [[maybe_unused]] int status = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
