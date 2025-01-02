@@ -18,7 +18,7 @@ constexpr uint32_t TmpBufferSize = 0x10000;
 uint8_t tmpBuffer[TmpBufferSize];
 
 constexpr uint32_t SampleCacheNumSamples{20000};
-FilmStream::Sample sampleCache[SampleCacheNumSamples];
+FilmStream::CachedSample sampleCache[SampleCacheNumSamples];
 
 FilmStream film(tmpBuffer, TmpBufferSize, sampleCache, SampleCacheNumSamples, &filmInitCallback, &filmLoopCallback);
 

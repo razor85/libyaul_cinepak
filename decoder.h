@@ -68,6 +68,30 @@ public:
 
   static_assert(sizeof(Sample) == 16);
 
+  struct CachedSample {
+    uint32_t length;
+    uint32_t info;
+
+    CachedSample() = default;
+
+    CachedSample(const Sample &sample) {
+      length = sample.length;
+      if (sample.isAudio()) {
+        info = 0xFFFFFFFF;
+      } else {
+        DEBUG_REQUIRE_NE(sample.info2, 0xFFFFFFFF);
+        info = sample.info2;
+      }
+    }
+
+    [[nodiscard]] bool isAudio() const { return info == 0xFFFFFFFF; }
+
+    [[nodiscard]] bool isVideo() const { return !isAudio(); }
+
+  } __packed;
+
+  static_assert(sizeof(CachedSample) == 8);
+
   struct StripHeader {
     uint16_t cvidId;
     uint16_t dataSize;
@@ -83,33 +107,29 @@ public:
     uint8_t y[4];
     int8_t u;
     int8_t v;
-
-    void create(FilmStream &file);
   } __packed;
 
   static_assert(sizeof(Codebook) == 6);
 
-  struct Codebook555 {
+  struct CodebookRGB {
     uint16_t color[4];
 
     void create(Codebook &book);
   } __packed;
 
-  static_assert(sizeof(Codebook555) == 8);
+  static_assert(sizeof(CodebookRGB) == 8);
 
   struct StripCodebook {
-    Codebook v1[256];
-    Codebook v4[256];
-    Codebook555 v1RGB[256];
-    Codebook555 v4RGB[256];
+    CodebookRGB v1[256];
+    CodebookRGB v4[256];
   };
 
-  static_assert(sizeof(StripCodebook) == (256 * 2 * sizeof(Codebook) + 256 * 2 * sizeof(Codebook555)));
+  static_assert(sizeof(StripCodebook) == (256 * 2 * sizeof(CodebookRGB)));
 
   struct StripData {
-    static constexpr uint32_t MaxStrips = 16;
-    StripCodebook codebooks[MaxStrips];
-    uint32_t strip;
+    StripCodebook codebooks[2];
+    StripCodebook *lastCodebook{nullptr};
+    StripCodebook *activeCodebook{nullptr};
 
     uint32_t topX;
     uint32_t writeX;
@@ -120,8 +140,10 @@ public:
     uint32_t bottomY;
 
     void create() {
-      memset(codebooks, 0, MaxStrips * sizeof(StripCodebook));
-      strip = 0;
+      memset(codebooks, 0, 2 * sizeof(StripCodebook));
+      lastCodebook = &codebooks[0];
+      activeCodebook = &codebooks[1];
+
       writeX = topX = 0;
       bottomX = 320;
       writeY = topY = 0;
@@ -141,13 +163,16 @@ public:
       }
     }
 
-    [[nodiscard]] Codebook *getV1Codebook() { return codebooks[strip].v1; }
+    void swapCodebook() {
+      StripCodebook *tmp = activeCodebook;
+      activeCodebook = lastCodebook;
+      lastCodebook = tmp;
+    }
 
-    [[nodiscard]] Codebook555 *getV1Codebook555() { return codebooks[strip].v1RGB; }
+    [[nodiscard]] CodebookRGB *getV1Codebook() { return activeCodebook->v1; }
 
-    [[nodiscard]] Codebook *getV4Codebook() { return codebooks[strip].v4; }
+    [[nodiscard]] CodebookRGB *getV4Codebook() { return activeCodebook->v4; }
 
-    [[nodiscard]] Codebook555 *getV4Codebook555() { return codebooks[strip].v4RGB; }
   } __packed;
 
   struct VideoHeader {
@@ -165,10 +190,12 @@ private:
 
   // Return the current sample, don't do anything else.
   // TODO: Check if returning a reference is actually faster.
-  [[nodiscard]] Sample getNextSample() {
+  [[nodiscard]] CachedSample getNextSample() {
     DEBUG_REQUIRE_LT(m_sampleCacheIndex, m_sampleCacheCount);
     return m_sampleCache[m_sampleCacheIndex++];
   }
+
+  [[nodiscard]] Codebook readCodebook();
 
   void renderPixel1(uint8_t c0);
   void renderPixel4(uint8_t c0, uint8_t c1, uint8_t c2, uint8_t c3);
@@ -176,12 +203,12 @@ private:
   void readVectorsInter(uint16_t chunkDataLength);
   void readV1VectorsInChunk(uint16_t chunkDataLength);
   void readChunk(uint16_t chunkID, uint16_t chunkDataLength);
-  void parseVideo(const Sample &sample);
-  void parseAudio(const Sample &sample);
-  void parseSample(const Sample &sample);
+  void parseVideo(const CachedSample &sample);
+  void parseAudio(const CachedSample &sample);
+  void parseSample(const CachedSample &sample);
 
 public:
-  FilmStream(uint8_t *tmpBuffer, uint32_t tmpBufferSize, Sample *sampleCache, uint32_t sampleCacheCapacity,
+  FilmStream(uint8_t *tmpBuffer, uint32_t tmpBufferSize, CachedSample *sampleCache, uint32_t sampleCacheCapacity,
     InitializeCallback initializeCallback = &FilmStream::EmptyInitializeCallback,
     LoopCallback loopCallback = &FilmStream::EmptyLoopCallback)
       : m_initializeCallback(initializeCallback)
@@ -208,7 +235,7 @@ private:
   StabChunk m_stabChunk{};
 
   // TODO: FIX THIS
-  const Sample *m_sampleCache{nullptr};
+  const CachedSample *m_sampleCache{nullptr};
   const uint32_t m_sampleCacheCapacity{0};
 
   uint32_t m_sampleCacheCount{0};

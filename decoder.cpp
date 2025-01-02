@@ -13,6 +13,8 @@ struct Video {
   uint32_t startY = 0;
   uint16_t *vdp2DestinationBuffer = reinterpret_cast<uint16_t *>(VDP2_VRAM_ADDR(0, 0));
 
+  // We write to a big temporary buffer and dma transfer to VRAM because one 320x240x3 won't fit in VRAM and we can't
+  // double buffer there.
   uint16_t tmpBuffer[TargetSize];
   uint16_t *vdp2ImagePtr = tmpBuffer;
 };
@@ -51,8 +53,9 @@ static void waitCopyingVideoFrame() {
 
 void copyVideoFrame(uint32_t delta) {
   waitCopyingVideoFrame();
-  vdp_dma_enqueue(video.vdp2DestinationBuffer + delta, video.vdp2ImagePtr + delta,
-    Video::TargetWidth * video.height * sizeof(uint16_t));
+
+  constexpr uint32_t FixedFactor = Video::TargetWidth * sizeof(uint16_t);
+  vdp_dma_enqueue(video.vdp2DestinationBuffer + delta, video.vdp2ImagePtr + delta, FixedFactor * video.height);
 
   copyingVideoFrame = vdp_dma_count_get();
 }
@@ -69,9 +72,7 @@ uint32_t readU24(volatile uint8_t *bytes) { return bytes[2] | (bytes[1] << 8) | 
 
 } // namespace
 
-void FilmStream::Codebook::create(FilmStream &file) { file.read(this, sizeof(Codebook)); }
-
-void FilmStream::Codebook555::create(Codebook &book) {
+void FilmStream::CodebookRGB::create(Codebook &book) {
   // | r |   | 1.0  0.0  2.0 | | y |
   // | g | = | 1.0 -0.5 -1.0 | | u |
   // | b |   | 1.0  2.0  0.0 | | v |
@@ -80,9 +81,10 @@ void FilmStream::Codebook555::create(Codebook &book) {
   const int16_t cb = +(book.u << 1);
 
   for (uint32_t i = 0; i < 4; ++i) {
-    const int16_t r = book.y[i] + cr;
-    const int16_t g = book.y[i] + cg;
-    const int16_t b = book.y[i] + cb;
+    const int16_t y = book.y[i];
+    const int16_t r = y + cr;
+    const int16_t g = y + cg;
+    const int16_t b = y + cb;
 
     const auto nr = clamp<uint8_t>(r, 0, 255);
     const auto ng = clamp<uint8_t>(g, 0, 255);
@@ -100,9 +102,6 @@ void FilmStream::Codebook555::create(Codebook &book) {
 }
 
 void FilmStream::StripData::copyLastCodebooks() {
-  DEBUG_REQUIRE_GT(strip, 0);
-  DEBUG_REQUIRE_LT(strip, MaxStrips);
-
   waitCopyingBlocks();
 
   cpu_dmac_cfg_t cfg = {
@@ -118,24 +117,20 @@ void FilmStream::StripData::copyLastCodebooks() {
     .bus_mode = CPU_DMAC_BUS_MODE_BURST,
     .resource_select = CPU_DMAC_RESOURCE_SELECT_DREQ,
     .non_default = 0,
-    .src = CPU_CACHE_THROUGH | (uint32_t) &codebooks[strip - 1],
-    .dst = CPU_CACHE_THROUGH | (uint32_t) &codebooks[strip],
+    .src = CPU_CACHE_THROUGH | (uint32_t) lastCodebook,
+    .dst = CPU_CACHE_THROUGH | (uint32_t) activeCodebook,
     .len = sizeof(StripCodebook),
     .ihr = dmaCopyBlocksDone,
     .ihr_work = NULL,
   };
 
-  copyingBlocks = true;
-
   cpu_dmac_channel_config_set(&cfg);
   cpu_dmac_channel_start(0);
+
+  copyingBlocks = true;
 }
 
-void FilmStream::StripData::copyLastCodebooksNoDMA() {
-  DEBUG_REQUIRE_GT(strip, 0);
-  DEBUG_REQUIRE_LT(strip, MaxStrips);
-  memcpy(&codebooks[strip], &codebooks[strip - 1], sizeof(StripCodebook));
-}
+void FilmStream::StripData::copyLastCodebooksNoDMA() { memcpy(activeCodebook, lastCodebook, sizeof(StripCodebook)); }
 
 void FilmStream::createCache() {
   // We only read a single sector, so check how many samples we have there.
@@ -144,11 +139,24 @@ void FilmStream::createCache() {
 
   m_sampleCacheIndex = 0;
   m_sampleCacheCount = min(m_stabChunk.numEntriesSampleTable, m_sampleCacheCapacity);
-  read(const_cast<Sample *>(m_sampleCache), sizeof(Sample) * m_sampleCacheCount);
+
+  for (uint32_t i = 0; i < m_sampleCacheCount; ++i) {
+    Sample tmpSample;
+    read(&tmpSample, sizeof(Sample));
+
+    const_cast<CachedSample &>(m_sampleCache[i]) = CachedSample(tmpSample);
+  }
+}
+
+FilmStream::Codebook FilmStream::readCodebook() {
+  Codebook result;
+  read(&result, sizeof(Codebook));
+
+  return result;
 }
 
 void FilmStream::renderPixel1(uint8_t c0) {
-  const Codebook555 e0 = m_stripData.getV1Codebook555()[c0];
+  const CodebookRGB e0 = m_stripData.getV1Codebook()[c0];
   const uint32_t x = m_stripData.writeX;
   const uint32_t y = m_stripData.writeY;
 
@@ -190,11 +198,11 @@ void FilmStream::renderPixel1(uint8_t c0) {
 }
 
 void FilmStream::renderPixel4(uint8_t c0, uint8_t c1, uint8_t c2, uint8_t c3) {
-  const Codebook555 *codebook = m_stripData.getV4Codebook555();
-  const Codebook555 &e0 = codebook[c0];
-  const Codebook555 &e1 = codebook[c1];
-  const Codebook555 &e2 = codebook[c2];
-  const Codebook555 &e3 = codebook[c3];
+  const CodebookRGB *codebook = m_stripData.getV4Codebook();
+  const CodebookRGB &e0 = codebook[c0];
+  const CodebookRGB &e1 = codebook[c1];
+  const CodebookRGB &e2 = codebook[c2];
+  const CodebookRGB &e3 = codebook[c3];
 
   const uint32_t x = m_stripData.writeX;
   const uint32_t y = m_stripData.writeY;
@@ -427,46 +435,33 @@ void FilmStream::readV1VectorsInChunk(uint16_t chunkDataLength) {
 void FilmStream::readChunk(uint16_t chunkID, uint16_t chunkDataLength) {
   DEBUG_REQUIRE_EQ(chunkDataLength % 2, 0);
 
-  // If we are still copying the blocks.
-  waitCopyingBlocks();
-
   switch (chunkID) {
   // 12 bit V4 (0x2000) or V1(0x2200)
   case 0x2000:
   case 0x2200: {
-    DEBUG_REQUIRE_LT(m_stripData.strip, FilmStream::StripData::MaxStrips);
-
     // Start DIVU
     uint32_t remainingSectionBytes = chunkDataLength;
     cpu_divu_32_32_set(remainingSectionBytes, sizeof(Codebook));
 
-    Codebook *codebookPtr;
-    Codebook555 *codebook555Ptr;
+    CodebookRGB *codebookPtr;
     if (chunkID == 0x2000) {
       codebookPtr = m_stripData.getV4Codebook();
-      codebook555Ptr = m_stripData.getV4Codebook555();
     } else {
       codebookPtr = m_stripData.getV1Codebook();
-      codebook555Ptr = m_stripData.getV1Codebook555();
     }
 
     DEBUG_REQUIRE_NE(codebookPtr, nullptr);
-    DEBUG_REQUIRE_NE(codebook555Ptr, nullptr);
 
     const uint32_t numReads = cpu_divu_quotient_get();
     const uint32_t numReadBytes = numReads * sizeof(Codebook);
     DEBUG_REQUIRE_LE(numReadBytes, sizeof(Codebook) * 256);
 
-    // TODO: Opt
-    // read(codebookPtr, numReadBytes);
-
     for (uint32_t i = 0; i < numReads; ++i) {
-      read(&codebookPtr[i], sizeof(Codebook));
-      codebook555Ptr[i].create(codebookPtr[i]);
+      FilmStream::Codebook tmpCodebook = readCodebook();
+      codebookPtr[i].create(tmpCodebook);
     }
 
     remainingSectionBytes -= numReadBytes;
-    DEBUG_REQUIRE_EQ(remainingSectionBytes, 0);
 
     // Deviant format shenanigans
     if (remainingSectionBytes) {
@@ -477,20 +472,14 @@ void FilmStream::readChunk(uint16_t chunkID, uint16_t chunkDataLength) {
   // 12 bit V4 (0x2100) or V1 (0x2300) - Update only
   case 0x2100:
   case 0x2300: {
-    DEBUG_REQUIRE_LT(m_stripData.strip, FilmStream::StripData::MaxStrips);
-
-    Codebook *codebookPtr;
-    Codebook555 *codebook555Ptr;
+    CodebookRGB *codebookPtr;
     if (chunkID == 0x2100) {
       codebookPtr = m_stripData.getV4Codebook();
-      codebook555Ptr = m_stripData.getV4Codebook555();
     } else {
       codebookPtr = m_stripData.getV1Codebook();
-      codebook555Ptr = m_stripData.getV1Codebook555();
     }
 
     DEBUG_REQUIRE_NE(codebookPtr, nullptr);
-    DEBUG_REQUIRE_NE(codebook555Ptr, nullptr);
 
     uint32_t remainingSectionBytes = chunkDataLength;
     while (remainingSectionBytes >= 4) {
@@ -499,13 +488,13 @@ void FilmStream::readChunk(uint16_t chunkID, uint16_t chunkDataLength) {
 
       for (uint32_t i = 0; i < 32; ++i) {
         if (flags & 0x80000000) {
-          codebookPtr->create(*this);
-          codebook555Ptr->create(*codebookPtr);
+          FilmStream::Codebook tmpCodebook = readCodebook();
+          codebookPtr->create(tmpCodebook);
+
           remainingSectionBytes -= 6;
         }
 
         ++codebookPtr;
-        ++codebook555Ptr;
         flags <<= 1;
       }
     }
@@ -553,18 +542,24 @@ void FilmStream::readChunk(uint16_t chunkID, uint16_t chunkDataLength) {
   }
 }
 
-void FilmStream::parseVideo(const Sample &sample) {
+void FilmStream::parseVideo(const CachedSample &sample) {
   const uint32_t sampleLimit = getOffset() + sample.length;
-  static_assert(sizeof(FilmStream::VideoHeader) == 10);
 
   VideoHeader cvidHeader;
   read(&cvidHeader, sizeof(VideoHeader));
 
-  const bool copyLastCodeBooks = !(cvidHeader.flags & 0x1);
+  const bool shouldCopyLastCodeBooks = !(cvidHeader.flags & 0x1);
   const uint32_t length = readU24(cvidHeader.length);
 
   // Used when stripId == 0
-  uint8_t auxData[6];
+  union {
+    struct {
+      uint32_t u32;
+      uint16_t u16;
+    };
+    uint8_t bytes[6];
+  } auxData;
+
   bool auxDataUsed = false;
 
   if (!m_cvidHeaderPadding.hasValue()) {
@@ -573,22 +568,27 @@ void FilmStream::parseVideo(const Sample &sample) {
     // Execute division on DIV-U and then check for the mod operation if needed.
     uint32_t remainder = 0;
     if (length != m_stabChunk.length) {
-      cpu_divu_32_32_set(m_stabChunk.length, length);
       remainder = cpu_divu_remainder_get();
     }
 
     if (remainder != 0) {
       // If the encoded frame size differs from the frame size as indicated by the container file, this data likely
       // comes from a Sega FILM/CPK file. If the frame header is followed by the bytes FE 00 00 06 00 00 then this is
-      // probably one of the two known files that have 6 extra bytes after the frame header. Else, assume 2 extra bytes.
-      // The container size also cannot be a multiple of the encoded size.
+      // probably one of the two known files that have 6 extra bytes after the frame header. Else, assume 2 extra
+      // bytes. The container size also cannot be a multiple of the encoded size. (FFMPEG DOCS)
       m_cvidHeaderPadding = 2;
       if (m_stabChunk.length >= 16) {
         auxDataUsed = true;
-        read(auxData, 6);
+        read(auxData.bytes, 6);
 
-        if ((auxData[0] == 0xFE) && (auxData[1] == 0x00) && (auxData[2] == 0x00) && (auxData[3] == 0x06) &&
-          (auxData[4] == 0x00) && (auxData[5] == 0x00)) {
+        // Original:
+        // if ((auxData.bytes[0] == 0xFE) && (auxData.bytes[1] == 0x00) && (auxData.bytes[2] == 0x00) &&
+        // (auxData.bytes[3] == 0x06) && (auxData.bytes[4] == 0x00) && (auxData.bytes[5] == 0x00)) {
+        // m_cvidHeaderPadding = 6;
+        // }
+
+        // Yep, this is UB on C++ but GCC should handle it just fine.
+        if (auxData.u32 == 0xFE000006 && auxData.u16 == 0x0000) {
           m_cvidHeaderPadding = 6;
         }
       }
@@ -599,17 +599,16 @@ void FilmStream::parseVideo(const Sample &sample) {
   const uint32_t skipBytes = *m_cvidHeaderPadding;
 
   if (!auxDataUsed) {
-    skip(*m_cvidHeaderPadding);
+    skip(skipBytes);
   }
 
   uint16_t lastBottomY = 0;
   for (uint16_t stripId = 0; stripId < cvidHeader.numCodedStrips; ++stripId) {
-    m_stripData.strip = stripId;
-
     // flag bit 0 will tell if we need the contents of the previous strip
-    if (stripId > 0 && copyLastCodeBooks) {
-      m_stripData.copyLastCodebooksNoDMA();
-      // m_stripData.copyLastCodebooks();
+    if (stripId > 0 && shouldCopyLastCodeBooks) {
+      // For debugging use the No DMA version:
+      // m_stripData.copyLastCodebooksNoDMA();
+      m_stripData.copyLastCodebooks();
     }
 
     StripHeader stripHeader;
@@ -619,7 +618,7 @@ void FilmStream::parseVideo(const Sample &sample) {
       // we must skip 2, we can only 8 now.
       const uint32_t validAuxBytes = 6 - skipBytes;
       if (validAuxBytes) {
-        memcpy(&stripHeader, auxData + skipBytes, validAuxBytes);
+        memcpy(&stripHeader, auxData.bytes + skipBytes, validAuxBytes);
       }
 
       read(reinterpret_cast<uint8_t *>(&stripHeader) + validAuxBytes, sizeof(StripHeader) - validAuxBytes);
@@ -656,12 +655,17 @@ void FilmStream::parseVideo(const Sample &sample) {
     } // Strip data
 
     DEBUG_REQUIRE_EQ(getOffset(), stripLimit);
+
+    // Keep the last strip without swapping because the next frame might need it.
+    if (stripId != cvidHeader.numCodedStrips - 1) {
+      m_stripData.swapCodebook();
+    }
   }
 
   DEBUG_REQUIRE_EQ(getOffset(), sampleLimit);
 }
 
-void FilmStream::parseAudio(const Sample &sample) {
+void FilmStream::parseAudio(const CachedSample &sample) {
   uint32_t length = sample.length;
 
   // TODO: Mono at least
@@ -669,7 +673,6 @@ void FilmStream::parseAudio(const Sample &sample) {
   return;
 
   /*
-
   // TODO: Proper stereo
   if (m_fdscChunk.audioChannels == 2) {
     length >>= 1;
@@ -693,7 +696,7 @@ void FilmStream::parseAudio(const Sample &sample) {
   */
 }
 
-void FilmStream::parseSample(const Sample &sample) {
+void FilmStream::parseSample(const CachedSample &sample) {
   if (sample.isAudio()) {
     parseAudio(sample);
   } else {
@@ -757,22 +760,20 @@ void FilmStream::play(cdfs_filelist_entry_t *fileListEntry) {
   [[maybe_unused]] uint32_t samplesInSecCount = 0;
   [[maybe_unused]] uint32_t bytesInSecCount = 0;
   [[maybe_unused]] uint32_t lastBytesInSecCount = 0;
-  [[maybe_unused]] uint32_t playTime = 0;
 
   // FILM timing
-  Timer frameTimer;
+  Timer frameTimer, totalTimer;
   for (uint32_t sampleId = 0; sampleId < numSamples; ++sampleId) {
     if (!m_loopCallback()) {
       break;
     }
 
-    Sample sample = getNextSample();
-    frameTimer.reset();
+    CachedSample sample = getNextSample();
 
-    DEBUG_REQUIRE_LT(sample.info2, INT32_MAX / 1000);
-    cpu_divu_32_32_set(1000 * sample.info2, m_stabChunk.frameRateBaseFrequencyHz);
+    DEBUG_REQUIRE(sample.isAudio() || sample.info < (INT32_MAX / 1000));
+    cpu_divu_32_32_set(1000 * sample.info, m_stabChunk.frameRateBaseFrequencyHz);
+
     const uint32_t timeToNextFrameMs = cpu_divu_quotient_get();
-
     parseSample(sample);
 
     if constexpr (ShowStatistics) {
@@ -780,19 +781,20 @@ void FilmStream::play(cdfs_filelist_entry_t *fileListEntry) {
       bytesInSecCount += sample.length;
     }
 
-    // Wait until we can proccess next frame due to pending interval
-    // while (sample.isVideo() && (frameTimer.count() < timeToNextFrameMs)) {
-    //   cpu_instr_nop();
-    // }
-
     if (sample.isVideo()) {
+      // Wait until we can proccess next frame due to pending interval (from previous frame).
       const uint32_t delta = video.startY * Video::TargetWidth;
+      while (frameTimer.count() < timeToNextFrameMs) {
+        cpu_instr_nop();
+      }
+
+      frameTimer.reset();
       copyVideoFrame(delta);
     }
 
     if constexpr (ShowStatistics) {
       Console::clear();
-      Console::printf("Play Time %d\n"
+      Console::printf("Play Time %d ms\n"
                       "Frame %d\n"
                       "SamplesInSec: %d\n"
                       "BytesInSec: %d\n"
@@ -800,9 +802,11 @@ void FilmStream::play(cdfs_filelist_entry_t *fileListEntry) {
                       "Audio: %c / %d bits / %d Hz\n"
                       "NumPlayedSamples: %d\n"
                       "TickRate: %d Hz\n",
-        playTime, m_sampleCacheIndex, samplesInSec, bytesInSecCount, lastBytesInSecCount,
+        totalTimer.count(), m_sampleCacheIndex, samplesInSec, bytesInSecCount, lastBytesInSecCount,
         m_fdscChunk.audioChannels == 1 ? 'M' : 'S', m_fdscChunk.audioResolution, m_fdscChunk.frequencyHz,
         audio.numPlayedSamples, framerateBaseFrequencyHz);
+
+      Console::flush();
     }
   }
 
