@@ -70,6 +70,8 @@ void initializeFilm() {
 
 uint32_t readU24(volatile uint8_t *bytes) { return bytes[2] | (bytes[1] << 8) | (bytes[0] << 16); }
 
+uint32_t readU32(volatile uint8_t *bytes) { return bytes[3] | (bytes[2] << 8) | (bytes[1] << 16) | (bytes[0] << 24); }
+
 } // namespace
 
 void FilmStream::CodebookRGB::create(Codebook &book) {
@@ -308,87 +310,68 @@ void FilmStream::readVectors(uint16_t chunkDataLength) {
 }
 
 void FilmStream::readVectorsInter(uint16_t chunkDataLength) {
-  DEBUG_REQUIRE_LT(chunkDataLength, m_tmpBufferSize);
+  uint32_t remainingSectionBytes = chunkDataLength;
 
-  read(m_tmpBuffer, chunkDataLength);
-  waitCopyingVideoFrame();
+  DEBUG_REQUIRE_LT(remainingSectionBytes, m_tmpBufferSize);
+  read(m_tmpBuffer, remainingSectionBytes);
 
-  uint32_t remainingSectionBytes = chunkDataLength - 4;
+  // v4 values
+  uint8_t v4TmpData[4];
 
   // We keep reading flags as long as it is possible. We first read 4
   // bytes and then we start shifting them for the VLC. Once we reach
   // the end we try to read a new flag.
-  uint32_t flags = *reinterpret_cast<uint32_t *>(m_tmpBuffer);
+  GenericBuffer buffer(m_tmpBuffer, remainingSectionBytes);
+  waitCopyingVideoFrame();
 
-  uint8_t *tmpData = m_tmpBuffer + 4;
-  uint32_t shifts = 0;
-  while (remainingSectionBytes) {
-    DEBUG_REQUIRE_LE(shifts, 31);
-    if (m_stripData.writeY >= m_stripData.bottomY) {
+  while ((remainingSectionBytes > 4) && (m_stripData.writeY < m_stripData.bottomY)) {
+    uint32_t flags = buffer.read32();
+    remainingSectionBytes -= 4;
+
+    // Test for mask bit. If 0 skip block, if 1 calculate it.
+    uint32_t mask = 0x80000000;
+    while (mask && m_stripData.writeY < m_stripData.bottomY) {
+      if (flags & mask) {
+        if (mask == 1) {
+          if (remainingSectionBytes < 4) {
       break;
+          }
+
+          // We read everything, start again.
+          flags = buffer.read32();
+          remainingSectionBytes -= 4;
+          mask = 0x80000000;
+        } else {
+          mask >>= 1;
     }
 
     // Running on VLC now, so we just keep consuming bytes (4 each time)
     // until there is nothing else. 0 => skip block, 1 => read next bit:
     // - next bit is 1 = V4
     // - next bit is 0 = V1
-    DEBUG_REQUIRE_LT(tmpData, m_tmpBuffer + m_tmpBufferSize);
-    if (flags & 0x80000000) {
-      // We are at the last bit so we need to fetch the next flags and check
-      // the first bit as if it was the next on this sequence.
-      if (shifts == 31) {
-        if (remainingSectionBytes < 4) {
-          break;
-        }
-
-        memcpy(&flags, tmpData, 4);
-        tmpData += 4;
-        remainingSectionBytes -= 4;
-
-        shifts = 0;
-      } else {
-        flags <<= 1;
-        shifts++;
-      }
-
-      if (flags & 0x80000000) {
+        if (flags & mask) {
         if (remainingSectionBytes < 4) {
           break;
         }
 
         // V4
-        renderPixel4(tmpData[0], tmpData[1], tmpData[2], tmpData[3]);
-        tmpData += 4;
+          buffer.read(v4TmpData, 4);
         remainingSectionBytes -= 4;
+          renderPixel4(v4TmpData[0], v4TmpData[1], v4TmpData[2], v4TmpData[3]);
+
       } else {
         if (remainingSectionBytes < 1) {
           break;
         }
 
         // V1
-        renderPixel1(tmpData[0]);
-        tmpData += 1;
-        remainingSectionBytes -= 1;
+          renderPixel1(buffer.read8());
+          --remainingSectionBytes;
       }
     }
 
+      mask >>= 1;
     m_stripData.skipBlock();
-
-    // If we read all the bits, we just fetch the next flags.
-    if (shifts == 31) {
-      DEBUG_REQUIRE_LT(tmpData, m_tmpBuffer + m_tmpBufferSize);
-      if (remainingSectionBytes < 4) {
-        break;
-      }
-
-      memcpy(&flags, tmpData, 4);
-      tmpData += 4;
-      remainingSectionBytes -= 4;
-
-      shifts = 0;
-    } else {
-      flags <<= 1;
-      shifts++;
     }
   }
 }

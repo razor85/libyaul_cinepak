@@ -12,6 +12,51 @@
 #define ASCII_CVID 1668704612 // 'cvid'
 #define ASCII_STAB 1398030658 // 'STAB'
 
+class GenericBuffer {
+public:
+  GenericBuffer(void *buffer, uint32_t size)
+      : m_buffer(static_cast<uint8_t *>(buffer))
+      , m_end(m_buffer + size) {}
+
+  uint8_t read8() {
+    DEBUG_REQUIRE_LE(m_buffer + 1, m_end);
+    uint8_t value = *m_buffer;
+    ++m_buffer;
+    return value;
+  }
+
+  uint16_t read16() {
+    DEBUG_REQUIRE_LE(m_buffer + 2, m_end);
+    uint16_t value = (m_buffer[1] | (m_buffer[0] << 8));
+    m_buffer += 2;
+    return value;
+  }
+
+  uint32_t read24() {
+    DEBUG_REQUIRE_LE(m_buffer + 3, m_end);
+    uint32_t value = (m_buffer[2] | (m_buffer[1] << 8) | (m_buffer[0] << 16));
+    m_buffer += 3;
+    return value;
+  }
+
+  uint32_t read32() {
+    DEBUG_REQUIRE_LE(m_buffer + 4, m_end);
+    uint32_t value = (m_buffer[3] | (m_buffer[2] << 8) | (m_buffer[1] << 16) | (m_buffer[0] << 24));
+    m_buffer += 4;
+    return value;
+  }
+
+  void read(uint8_t *target, uint32_t size) {
+    DEBUG_REQUIRE_LE(m_buffer + size, m_end);
+    for (volatile uint32_t i = 0; i < size; ++i) {
+      target[i] = *m_buffer++;
+    }
+  }
+
+  uint8_t *m_buffer;
+  const uint8_t *m_end;
+};
+
 class FilmStream : public StreamFile {
 public:
   // Will be called before stream begins
