@@ -48,9 +48,8 @@ public:
 
   void read(uint8_t *target, uint32_t size) {
     DEBUG_REQUIRE_LE(m_buffer + size, m_end);
-    for (volatile uint32_t i = 0; i < size; ++i) {
-      target[i] = *m_buffer++;
-    }
+    memcpy(target, m_buffer, size);
+    m_buffer += size;
   }
 
   uint8_t *m_buffer;
@@ -251,6 +250,29 @@ private:
   void parseVideo(const CachedSample &sample);
   void parseAudio(const CachedSample &sample);
   void parseSample(const CachedSample &sample);
+
+  // Cutting dbgio save us 300ms
+  bool IsLogEnabled = true;
+
+  void clearLog() {
+    if (IsLogEnabled) {
+      Console::clear();
+    }
+  }
+
+  template <typename... Args>
+  void printf(const char *msg, const Args &...args) {
+    if (IsLogEnabled) {
+      Console::printf(msg, args...);
+    }
+  }
+
+  template <typename... Args>
+  void printf_flush(const char *msg, const Args &...args) {
+    if (IsLogEnabled) {
+      Console::printf_flush(msg, args...);
+    }
+  }
 
 public:
   FilmStream(uint8_t *tmpBuffer, uint32_t tmpBufferSize, CachedSample *sampleCache, uint32_t sampleCacheCapacity,

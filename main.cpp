@@ -157,11 +157,11 @@ int main() {
     if (!movieSelected) {
       for (uint32_t i = 0; i < numMovieEntries; ++i) {
         if (menuSelection == i)
-          dbgio_printf(" > ");
+          Console::printf(" > ");
         else
-          dbgio_printf("   ");
+          Console::printf("   ");
 
-        dbgio_printf("%s\n", movieEntries[i]->name);
+        Console::printf("%s\n", movieEntries[i]->name);
       }
 
       if (pad0.released.button.down) {
@@ -178,7 +178,7 @@ int main() {
 
     } else {
       Console::clear();
-      dbgio_flush();
+      Console::flush();
 
       film.play(movieEntries[menuSelection]);
 
@@ -187,11 +187,9 @@ int main() {
       // pcmStreamStop();
       // sound_notify_driver();
       // film_audio_reset();
-
-      dbgio_dev_font_load();
     }
 
-    dbgio_flush();
+    Console::flush();
     vdp2_sync();
     vdp2_sync_wait();
   }
@@ -287,12 +285,11 @@ void user_init(void) {
 
   smpc_peripheral_init();
 
-  dbgio_init();
-  Console::initialize();
+  // Console::initialize();
   SystemTime::initialize();
 
   vdp2_tvmd_display_set();
 
   // TODO: Improve performance by ignoring HBLANK IN
-  // scu_ic_mask_chg(SCU_IC_MASK_ALL, SCU_IC_MASK_HBLANK_IN);
+  scu_ic_mask_chg(SCU_IC_MASK_ALL, SCU_IC_MASK_HBLANK_IN);
 }
