@@ -3,7 +3,7 @@
 
 #include "intellisense.h"
 
-#include <int16.h>
+#include <gamemath.h>
 #include <stdint.h>
 #include <yaul.h>
 

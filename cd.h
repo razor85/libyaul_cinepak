@@ -7,9 +7,6 @@
 #define DRDY 0x0002 /* Data transfer preparations complete */
 #define EHST 0x0080 /* Host I/O processing complete */
 
-// Read 4 bytes from register
-#define CD_BLOCK_DATA_4 0x25818000UL
-
 // Read 2 bytes from register
 #define CD_BLOCK_DATA_2 0x25890000UL
 

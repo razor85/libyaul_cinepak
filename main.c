@@ -107,10 +107,11 @@ void loadSoundDriver() {
 }
 
 int main() {
+  cdfs_init();
   cdfs_filelist_entry_t *const filelist_entries = cdfs_entries_alloc(-1);
   DEBUG_REQUIRE(filelist_entries != NULL);
 
-  cdfs_filelist_default_init(&filelist, filelist_entries, -1);
+  cdfs_filelist_init(&filelist, filelist_entries, -1);
   cdfs_filelist_root_read(&filelist);
 
   cdfs_filelist_entry_t *movieEntries[MOVIE_LIST_ENTRIES];

@@ -44,12 +44,8 @@ uint16_t stream_read16(binary_stream_t *);
 uint32_t stream_read32(binary_stream_t *);
 uint32_t stream_pos(binary_stream_t *stream);
 void stream_readbytes(binary_stream_t *, volatile uint16_t*, uint32_t);
-void stream_readbytes4(binary_stream_t *, volatile uint32_t*, uint32_t);
-void stream_readbytes_generic(binary_stream_t *, volatile void*, uint32_t);
 
 void stream_skip(binary_stream_t *, uint32_t);
-void stream_skip4(binary_stream_t *, uint32_t);
-void stream_skip_generic(binary_stream_t *, uint32_t);
 
 void frtOviHandler() { frtOverflowCount++; }
 
@@ -61,11 +57,6 @@ static void frtTimerStart(uint16_t count) {
 static uint32_t frtTimerEllapsed() {
   uint32_t ticks = (0xFFFF * frtOverflowCount) + cpu_frt_count_get();
   return ticks / frtTimerDiv;
-}
-
-static inline fix16_t fix16_div(fix16_t dividend, fix16_t divisor) {
-  cpu_divu_fix16_set(dividend, divisor);
-  return cpu_divu_quotient_get();
 }
 
 inline void codebook_new(codebook_t *cb, binary_stream_t *stream) {
@@ -197,7 +188,7 @@ void film_sample_cache_new(binary_stream_t *stream, uint32_t totalNumSamples) {
   film_sample_t *outputSamples = stream->sampleCache.samples;
   for (volatile uint32_t i = 0; i < totalNumSamples; ++i) {
     volatile cd_film_sample_t sample = { 0 };
-    stream_readbytes4(stream, CAST_DATA32(&sample), sizeof(cd_film_sample_t));
+    stream_readbytes(stream, CAST_DATA32(&sample), sizeof(cd_film_sample_t));
     
     const bool isAudio = (sample.info1 == 0xFFFFFFFF);
     DEBUG_REQUIRE_NE(sample.length, 0);
@@ -315,45 +306,6 @@ void stream_readbytes(binary_stream_t *stream, volatile uint16_t *destPtr,
   stream->offset += len;
 }
 
-void stream_readbytes4(binary_stream_t *stream, volatile uint32_t *destPtr,
-  uint32_t len) {
-
-  DEBUG_REQUIRE_EQ(len % 4, 0);
-  DEBUG_REQUIRE_NE(destPtr, NULL);
-  DEBUG_REQUIRE_LE(stream->offset + len, stream->size);
-
-  static volatile uint32_t *cdData = (volatile uint32_t *)CD_BLOCK_DATA_4;
-
-  uint32_t remainingBytes = len;
-  while (remainingBytes) {
-    if (!stream->dataAvailable)
-      triggerDataRequest(stream);
-
-    const uint32_t readSize = MIN(stream->dataAvailable, remainingBytes);
-    const uint32_t readSizeLoop = readSize >> 2;
-    DEBUG_REQUIRE_EQ(readSize % 2, 0);
-    
-    stream->dataAvailable -= readSize;
-    remainingBytes -= readSize;
-
-    for (volatile uint32_t i = 0; i < readSizeLoop; ++i) {
-      *destPtr = *cdData;
-      destPtr++;
-    }
-  }
-
-  stream->offset += len;
-}
-
-void stream_readbytes_generic(binary_stream_t *stream, volatile void *destPtr,
-  uint32_t len) {
-
-  if (len % 4 == 0)
-    stream_readbytes4(stream, CAST_DATA32(destPtr), len);
-  else
-    stream_readbytes(stream, CAST_DATA16(destPtr), len);
-}
-
 void stream_skip(binary_stream_t *stream, uint32_t len) {
   DEBUG_REQUIRE_EQ(len % 2, 0);
   DEBUG_REQUIRE_LE(stream->offset + len, stream->size);
@@ -381,40 +333,6 @@ void stream_skip(binary_stream_t *stream, uint32_t len) {
   stream->offset += len;
 }
 
-void stream_skip4(binary_stream_t *stream, uint32_t len) {
-  DEBUG_REQUIRE_EQ(len % 4, 0);
-  DEBUG_REQUIRE_LE(stream->offset + len, stream->size);
-
-  static volatile uint32_t *cdData = (volatile uint32_t *)CD_BLOCK_DATA_4;
-
-  uint32_t remainingBytes = len;
-  while (remainingBytes) {
-    if (!stream->dataAvailable)
-      triggerDataRequest(stream);
-
-    const uint32_t readSize = MIN(stream->dataAvailable, remainingBytes);
-    const uint32_t readSizeLoop = readSize >> 2;
-    DEBUG_REQUIRE_EQ(readSize % 4, 0);
-    
-    stream->dataAvailable -= readSize;
-    remainingBytes -= readSize;
-
-    volatile uint16_t nothing __unused;
-    for (volatile uint32_t i = 0; i < readSizeLoop; ++i) {
-      nothing = *cdData;
-    }
-  }
-
-  stream->offset += len;
-}
-
-void stream_skip_generic(binary_stream_t *stream, uint32_t len) {
-  if (len % 4 == 0)
-    stream_skip4(stream, len);
-  else
-    stream_skip(stream, len);
-}
-
 uint16_t stream_read16(binary_stream_t *stream) {
   volatile uint16_t data;
   stream_readbytes(stream, &data, 2);
@@ -424,7 +342,7 @@ uint16_t stream_read16(binary_stream_t *stream) {
 
 uint32_t stream_read32(binary_stream_t *stream) {
   volatile uint32_t data;
-  stream_readbytes4(stream, &data, 4);
+  stream_readbytes(stream, &data, 4);
 
   return data;
 }
@@ -557,7 +475,7 @@ void readVectors(binary_stream_t *stream, stripdata_t *data,
   uint32_t remainingSectionBytes = chunkDataLength - 4;
 
   DEBUG_REQUIRE_LT(remainingSectionBytes, TMP_BUFFER_SIZE);
-  stream_readbytes_generic(stream, tmpBuffer, remainingSectionBytes);
+  stream_readbytes(stream, tmpBuffer, remainingSectionBytes);
   
   waitCopyingVideoFrame();
 
@@ -603,7 +521,7 @@ void readVectors(binary_stream_t *stream, stripdata_t *data,
 void readVectorsInter(binary_stream_t *stream, stripdata_t *data,
   uint16_t chunkDataLength) {
 
-  stream_readbytes_generic(stream, tmpBuffer, chunkDataLength);
+  stream_readbytes(stream, tmpBuffer, chunkDataLength);
   waitCopyingVideoFrame();
 
   uint32_t remainingSectionBytes = chunkDataLength - 4;
@@ -706,7 +624,7 @@ void readV1VectorsInChunk(binary_stream_t *stream, stripdata_t *data,
   while (readBytes > 0) {
     const uint32_t readNow = MIN(readBytes, TMP_BUFFER_SIZE);
 
-    stream_readbytes_generic(stream, tmpBuffer, readNow);
+    stream_readbytes(stream, tmpBuffer, readNow);
     for (volatile uint32_t i = 0; i < readNow; ++i) {
       const uint8_t c0 = tmpBuffer[i];
       renderPixel1(data, c0);
@@ -751,7 +669,7 @@ void readChunk(uint16_t chunkID, uint16_t chunkDataLength,
       const uint32_t numReadBytes = numReads * 6;
       DEBUG_REQUIRE_LE(numReadBytes, sizeof(codebook_t) * 256);
 
-      stream_readbytes_generic(stream, codebookPtr, numReadBytes);
+      stream_readbytes(stream, codebookPtr, numReadBytes);
       for (uint32_t i = 0; i < numReads; ++i) {
         codebook555_new(&codebookPtr[i], &codebook555Ptr[i]);
       }
@@ -872,7 +790,7 @@ void parseVideo(binary_stream_t *stream) {
     }
 
     volatile uint16_t tmpStripBuffer[6];
-    stream_readbytes4(stream, CAST_DATA32(tmpStripBuffer), 6 * sizeof(uint16_t));
+    stream_readbytes(stream, CAST_DATA32(tmpStripBuffer), 6 * sizeof(uint16_t));
 
     const uint16_t stripDataLength = tmpStripBuffer[1];
 
@@ -929,7 +847,7 @@ void parseAudio(const film_sample_t *sample, binary_stream_t *stream) {
   if (audioChannels == 2) {
     length >>= 1;
     DEBUG_REQUIRE_EQ(length % 2, 0);
-    stream_skip_generic(stream, sample->length - length);
+    stream_skip(stream, sample->length - length);
   }
 
   uint32_t missingBytes = length;
@@ -938,7 +856,7 @@ void parseAudio(const film_sample_t *sample, binary_stream_t *stream) {
     uint16_t *writeLocation = film_audio_get_next_buffer_ptr(0);
     DEBUG_REQUIRE_NE(writeLocation, NULL);
 
-    stream_readbytes_generic(stream, writeLocation, readSize);
+    stream_readbytes(stream, writeLocation, readSize);
     film_audio_notify_read_buffer_bytes(readSize);
     missingBytes -= readSize;
   }
