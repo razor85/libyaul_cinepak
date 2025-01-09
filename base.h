@@ -219,12 +219,14 @@ struct Pair {
   TB _1;
 };
 
-template <typename T>
-class Optional {
+template <typename T, bool HasDestructor = true>
+class alignas(alignof(T)) Optional {
 private:
   void __destroy() {
-    if (m_hasValue) {
-      realValue.~T();
+    if constexpr (HasDestructor) {
+      if (m_hasValue) {
+        realValue.~T();
+      }
     }
   }
 

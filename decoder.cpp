@@ -23,7 +23,7 @@ struct Video {
   //////////////////////////////////////////////////////////////////////////////////
   Optional<uint32_t> m_copyingVideoFrame;
 
-  void waitCopyingVideoFrame() {
+  inline void waitCopyingVideoFrame() {
     if (m_copyingVideoFrame.hasValue()) {
       const uint32_t expectedValue = *m_copyingVideoFrame;
       while (vdp_dma_count_get() > expectedValue) {
@@ -54,8 +54,8 @@ Audio audio;
 
 // DMA
 volatile bool copyingBlocks = false;
-FORCE_INLINE void dmaCopyBlocksDone([[maybe_unused]] void *data) { copyingBlocks = false; }
-FORCE_INLINE void waitCopyingBlocks() {
+void dmaCopyBlocksDone([[maybe_unused]] void *data) { copyingBlocks = false; }
+inline void waitCopyingBlocks() {
   while (copyingBlocks) {
     cpu_instr_nop();
   }
@@ -72,15 +72,14 @@ void initializeFilm() {
   vdp2_sync_wait();
 }
 
-FORCE_INLINE uint32_t readU24(volatile uint8_t *bytes) { return bytes[2] | (bytes[1] << 8) | (bytes[0] << 16); }
-
-FORCE_INLINE uint32_t readU32(volatile uint8_t *bytes) {
+inline uint32_t readU24(volatile uint8_t *bytes) { return bytes[2] | (bytes[1] << 8) | (bytes[0] << 16); }
+inline uint32_t readU32(volatile uint8_t *bytes) {
   return bytes[3] | (bytes[2] << 8) | (bytes[1] << 16) | (bytes[0] << 24);
 }
 
 } // namespace
 
-void FilmStream::CodebookRGB::create(Codebook &book) {
+inline void FilmStream::CodebookRGB::create(Codebook &book) {
   // | r |   | 1.0  0.0  2.0 | | y |
   // | g | = | 1.0 -0.5 -1.0 | | u |
   // | b |   | 1.0  2.0  0.0 | | v |
@@ -149,13 +148,24 @@ void FilmStream::createCache() {
   [[maybe_unused]] const uint32_t samplesInitialPos = getOffset();
   DEBUG_REQUIRE_EQ(FILM_SAMPLE_START_OFFSET, samplesInitialPos);
 
-  m_sampleCacheIndex = 0;
-  m_sampleCacheCount = min(m_stabChunk.numEntriesSampleTable, m_sampleCacheCapacity);
+  if (m_stabChunk.numEntriesSampleTable > m_sampleCacheCapacity) {
+    Console::clear();
+    Console::printf_flush("Failed to load samples to cache, cache size must be greater or equal to %d",
+      m_stabChunk.numEntriesSampleTable);
 
-  Sample tmpSample{};
+    VDP_INFLOOP();
+  }
+
+  m_sampleCacheIndex = 0;
+  m_sampleCacheCount = m_stabChunk.numEntriesSampleTable;
+
+  CachedSample* cachedSample = m_sampleCache;
   for (uint32_t i = 0; i < m_sampleCacheCount; ++i) {
+    volatile Sample tmpSample;
     read(&tmpSample, sizeof(Sample));
-    const_cast<CachedSample &>(m_sampleCache[i]) = CachedSample(tmpSample);
+
+    cachedSample->readSample(tmpSample);
+    ++cachedSample;
   }
 }
 
@@ -706,7 +716,7 @@ void FilmStream::parseAudio(const CachedSample &sample) {
   */
 }
 
-void FilmStream::parseSample(const CachedSample &sample) {
+inline void FilmStream::parseSample(const CachedSample &sample) {
   if (sample.isAudio()) {
     parseAudio(sample);
   } else {
@@ -760,6 +770,7 @@ void FilmStream::play(cdfs_filelist_entry_t *fileListEntry) {
 
   // Must be called just before the sample list
   createCache();
+
   printf("SamplePos: %d\n"
          "SampleDataPos: %d\n"
          "Pos: %d\n",

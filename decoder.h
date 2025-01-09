@@ -101,26 +101,24 @@ public:
   static_assert(sizeof(StabChunk) == 16);
 
   // A sample stored in the STAB table is:
-  struct Sample {
+  struct alignas(4) Sample {
     uint32_t offset;
     uint32_t length;
     uint32_t info1;
     uint32_t info2;
-    [[nodiscard]] bool isAudio() const { return info1 == 0xFFFFFFFF; }
-    [[nodiscard]] bool isVideo() const { return !isAudio(); }
   } __packed;
 
   static_assert(sizeof(Sample) == 16);
 
-  struct CachedSample {
+  struct alignas(4) CachedSample {
     uint32_t length;
     uint32_t info;
 
     CachedSample() = default;
 
-    CachedSample(const Sample &sample) {
+    void readSample(volatile const Sample &sample) {
       length = sample.length;
-      if (sample.isAudio()) {
+      if (sample.info1 == 0xFFFFFFFF) {
         info = 0xFFFFFFFF;
       } else {
         DEBUG_REQUIRE_NE(sample.info2, 0xFFFFFFFF);
@@ -128,9 +126,9 @@ public:
       }
     }
 
-    [[nodiscard]] bool isAudio() const { return info == 0xFFFFFFFF; }
+    [[nodiscard]] inline bool isAudio() const { return info == 0xFFFFFFFF; }
 
-    [[nodiscard]] bool isVideo() const { return !isAudio(); }
+    [[nodiscard]] inline bool isVideo() const { return !isAudio(); }
 
   } __packed;
 
@@ -157,9 +155,8 @@ public:
 
   struct CodebookRGB {
     uint16_t color[4];
-
-    void create(Codebook &book);
-  } __packed;
+    inline void create(Codebook &book);
+  };
 
   static_assert(sizeof(CodebookRGB) == 8);
 
@@ -198,7 +195,7 @@ public:
 
     void copyLastCodebooksNoDMA();
 
-    void skipBlock() {
+    inline void skipBlock() {
       writeX += 4;
       if (writeX >= bottomX) {
         writeX = topX;
@@ -213,11 +210,10 @@ public:
       lastCodebook = tmp;
     }
 
-    [[nodiscard]] CodebookRGB *getV1Codebook() { return activeCodebook->v1; }
+    [[nodiscard]] inline CodebookRGB *getV1Codebook() { return activeCodebook->v1; }
 
-    [[nodiscard]] CodebookRGB *getV4Codebook() { return activeCodebook->v4; }
-
-  } __packed;
+    [[nodiscard]] inline CodebookRGB *getV4Codebook() { return activeCodebook->v4; }
+  };
 
   struct VideoHeader {
     uint8_t flags;
@@ -234,7 +230,7 @@ private:
 
   // Return the current sample, don't do anything else.
   // TODO: Check if returning a reference is actually faster.
-  [[nodiscard]] CachedSample getNextSample() {
+  [[nodiscard]] inline CachedSample getNextSample() {
     DEBUG_REQUIRE_LT(m_sampleCacheIndex, m_sampleCacheCount);
     return m_sampleCache[m_sampleCacheIndex++];
   }
@@ -249,7 +245,7 @@ private:
   void readChunk(uint16_t chunkID, uint16_t chunkDataLength);
   void parseVideo(const CachedSample &sample);
   void parseAudio(const CachedSample &sample);
-  void parseSample(const CachedSample &sample);
+  inline void parseSample(const CachedSample &sample);
 
   // Cutting dbgio save us 300ms
   bool IsLogEnabled = true;
@@ -290,21 +286,20 @@ public:
 private:
   InitializeCallback m_initializeCallback{nullptr};
   LoopCallback m_loopCallback{nullptr};
-
-  uint8_t *m_tmpBuffer{nullptr};
-  const uint32_t m_tmpBufferSize{0};
-
-  Optional<uint32_t> m_cvidHeaderPadding;
-  StripData m_stripData;
-
+  
   Header m_header{};
   FdscChunk m_fdscChunk{};
   StabChunk m_stabChunk{};
 
-  // TODO: FIX THIS
-  const CachedSample *m_sampleCache{nullptr};
-  const uint32_t m_sampleCacheCapacity{0};
+  uint8_t *m_tmpBuffer{nullptr};
+  const uint32_t m_tmpBufferSize{0};
 
+  // TODO: FIX THIS
+  CachedSample *m_sampleCache{nullptr};
+  const uint32_t m_sampleCacheCapacity{0};
   uint32_t m_sampleCacheCount{0};
   uint32_t m_sampleCacheIndex{0};
+
+  Optional<uint32_t, false> m_cvidHeaderPadding;
+  StripData m_stripData;
 };

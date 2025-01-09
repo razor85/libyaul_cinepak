@@ -32,20 +32,16 @@ constexpr uint32_t getTimerInterval() {
   }
 }
 
-void oviHandler() {
-  // TODO: decide what to do here.
-}
-
 void SystemTime::initialize() {
   Memory::uncached(ms) = 0;
   accumulator = 0;
 
   cpu_frt_init(getFrtInitValue());
   cpu_frt_count_set(0);
-  cpu_frt_ovi_set(oviHandler);
+  cpu_frt_ovi_set(nullptr);
   cpu_frt_count_set(0);
   cpu_frt_oca_set(getTimerInterval(), SystemTime::timerAutomaticUpdate);
-  cpu_frt_interrupt_priority_set(8);
+  cpu_frt_interrupt_priority_set(15);
 }
 
 void SystemTime::timerAutomaticUpdate() {

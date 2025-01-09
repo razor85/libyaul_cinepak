@@ -39,7 +39,7 @@ private:
   uint32_t m_dataAvailable{0};
   uint32_t m_offset{0};
 
-  static uint16_t waitFlagIRQ(CdBlockFlagsIRQ flag) {
+  FORCE_INLINE static uint16_t waitFlagIRQ(CdBlockFlagsIRQ flag) {
     volatile uint16_t lastRead = 0;
     do {
       lastRead = MEMORY_READ(16, CD_BLOCK_HIRQ);
@@ -48,7 +48,7 @@ private:
     return lastRead;
   }
 
-  static uint32_t numSectorsForSize(uint32_t size) {
+  FORCE_INLINE static uint32_t numSectorsForSize(uint32_t size) {
     // Past size so we get the complete number of sectors for the whole data.
     return (size + (CDFS_SECTOR_SIZE - 1)) / CDFS_SECTOR_SIZE;
   }
@@ -88,7 +88,9 @@ private:
     return sectorsReady;
   }
 
-  static void waitUntilCdDataIsAvailable() { waitFlagIRQ(CdBlockFlagsIRQ::DRDY); }
+  FORCE_INLINE static void waitUntilCdDataIsAvailable() {
+    waitFlagIRQ(CdBlockFlagsIRQ::DRDY);
+  }
 
   static void queueDiskRead(uint32_t fad, uint32_t size) {
     DEBUG_REQUIRE_NE(size, 0);
@@ -221,8 +223,9 @@ public:
       m_dataAvailable -= readSize;
       remainingBytes -= readSize;
 
+      [[maybe_unused]] volatile uint16_t nothing;
       for (volatile uint32_t i = 0; i < readSizeLoop; ++i) {
-        MEMORY_READ(16, CD_BLOCK_TRANSFER_REGISTER);
+        nothing = MEMORY_READ(16, CD_BLOCK_TRANSFER_REGISTER);
       }
     }
 
@@ -232,7 +235,7 @@ public:
   uint16_t read16() {
     DEBUG_REQUIRE(m_initialized);
 
-    uint16_t data = 0;
+    volatile uint16_t data = 0;
     read(&data, 2);
 
     return data;
@@ -241,25 +244,25 @@ public:
   uint32_t read32() {
     DEBUG_REQUIRE(m_initialized);
 
-    uint32_t data = 0;
+    volatile uint32_t data = 0;
     read(&data, 4);
 
     return data;
   }
 
-  [[nodiscard]] bool isInitialized() { return m_initialized; }
+  [[nodiscard]] inline bool isInitialized() { return m_initialized; }
 
-  [[nodiscard]] uint32_t getStartFAD() { return m_startFAD; }
+  [[nodiscard]] inline uint32_t getStartFAD() { return m_startFAD; }
 
-  [[nodiscard]] uint32_t getSize() { return m_size; }
+  [[nodiscard]] inline uint32_t getSize() { return m_size; }
 
-  [[nodiscard]] uint32_t getRemainingSectors() { return m_remainingSectors; }
+  [[nodiscard]] inline uint32_t getRemainingSectors() { return m_remainingSectors; }
 
-  [[nodiscard]] uint32_t getDataAvailable() { return m_dataAvailable; }
+  [[nodiscard]] inline uint32_t getDataAvailable() { return m_dataAvailable; }
 
-  [[nodiscard]] uint32_t getOffset() { return m_offset; }
+  [[nodiscard]] inline uint32_t getOffset() { return m_offset; }
 
-  [[nodiscard]] bool hasDataToRead() { return m_offset < m_size; }
+  [[nodiscard]] inline bool hasDataToRead() { return m_offset < m_size; }
 };
 
 #endif // DECODER_CD_H
