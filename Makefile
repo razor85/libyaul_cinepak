@@ -26,6 +26,3 @@ IP_1ST_READ_SIZE:= 0
 
 include $(YAUL_INSTALL_ROOT)/share/build.post.iso-cue.mk
 
-post-build-iso:
-	printf "20: 542D313830303347" | xxd -r - cinepak_player.iso
-
