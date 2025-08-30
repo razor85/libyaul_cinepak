@@ -18,7 +18,7 @@ uint32_t work_area[sizeof(decode_work_t)];
 
 #define VIDEO_WIDTH       320
 #define VIDEO_HEIGHT      240
-#define SAMPLE_CACHE_SIZE 5000
+#define SAMPLE_CACHE_SIZE 10000
 #define AUDIO_CACHE_SIZE  (4096 * 16)
 
 film_sample_t sampleCache[SAMPLE_CACHE_SIZE];
@@ -69,7 +69,7 @@ void film_audio_setup(uint16_t frequency, uint32_t channels, uint32_t numBits) {
   pcmStreamConfigure(channels == 2 ? 1 : 1, numBits, frequency);
   baseSoundMemory = getSlotAddress(0);
   soundMemory = baseSoundMemory;
-  soundMemoryLimit = baseSoundMemory + pcmStreamBufferSize(numBits, frequency);
+  soundMemoryLimit = baseSoundMemory + getSlotSize();
 }
 
 void film_audio_prepare_to_play() {}
@@ -135,6 +135,7 @@ int main() {
   bool restart = false;
 
   decode_work_t *cpk = &work_area;
+  decode_param_t params;
 
   while (true) {
     smpc_peripheral_process();
@@ -171,10 +172,12 @@ int main() {
 
       if (restart == true) {
         sprintf((char *) LWRAM(80), "FILM INIT START");
-        decode_param_t params;
+
+        memset(&sampleCache, 0, SAMPLE_CACHE_SIZE * sizeof(film_sample_t));
+        memset(&cpk->filmHeader, 0, sizeof(film_header));
 
         params.sampleBuffAddr = &sampleCache;
-        params.sampleBuffSize = SAMPLE_CACHE_SIZE;
+        params.sampleBuffSize = SAMPLE_CACHE_SIZE * sizeof(film_sample_t);
         params.vramBuffAddr = &decode_buffer;
         params.vramBufferWidth = VIDEO_WIDTH;
         params.vramBuffSize = (VIDEO_WIDTH * VIDEO_HEIGHT) * 4;

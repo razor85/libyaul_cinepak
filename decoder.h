@@ -49,8 +49,10 @@ typedef struct {
 // data holds the 'info2' field from the STAB data and if its audio, it holds
 // the sample length.
 typedef struct {
+  uint8_t *offset;
   uint32_t interval; // 0xFFFFFFFF if audio
   uint32_t length;
+  uint32_t padding;
 } __packed __aligned(4) film_sample_t;
 
 // A sample stored in the STAB table is:
@@ -62,9 +64,14 @@ typedef struct {
 } __packed __aligned(4) cd_film_sample_t;
 
 typedef struct {
-  film_sample_t *samples;
   uint32_t numSamples;
   uint32_t currentSample;
+  uint32_t currentBuffSample;
+  uint8_t *ringBuffStart;
+  uint8_t *ringBuffEnd;
+  uint8_t *writePos;
+  uint8_t *readPos;
+  film_sample_t *samples;
 } film_sample_cache_t;
 
 typedef struct {

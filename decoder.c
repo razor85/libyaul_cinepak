@@ -26,10 +26,6 @@ uint32_t lwrambuffer = 80;
 volatile uint32_t frtOverflowCount = 0;
 const uint32_t frtTimerDiv = CPU_FRT_NTSC_320_128_COUNT_1MS;
 
-// For saving reads
-#define TMP_BUFFER_SIZE 0x10000
-uint8_t tmpBuffer[TMP_BUFFER_SIZE];
-
 uint16_t stream_read16(binary_stream_t *);
 uint32_t stream_read32(binary_stream_t *);
 uint32_t stream_pos(binary_stream_t *stream);
@@ -50,7 +46,7 @@ static uint32_t frtTimerEllapsed() {
 }
 
 inline void codebook_new(codebook_t *cb, binary_stream_t *stream) {
-  stream_readbytes(stream, CAST_DATA16(cb), sizeof(codebook_t));
+  readBytesFromRingBuff(stream, CAST_DATA16(cb), sizeof(codebook_t));
 }
 
 inline void codebookRGB_new(codebook_t *book, codebookRGB_t *cbrgb) {
@@ -182,6 +178,10 @@ void film_sample_cache_new(binary_stream_t *stream, uint32_t totalNumSamples) {
 
   film_sample_t *outputSamples = stream->sampleCache.samples;
 
+  stream->sampleCache.ringBuffStart = (uint8_t *) outputSamples + (totalNumSamples * (sizeof(film_sample_t)));
+  stream->sampleCache.readPos = (uint8_t *) outputSamples + (totalNumSamples * (sizeof(film_sample_t)));
+  stream->sampleCache.writePos  = (uint8_t *) outputSamples + (totalNumSamples * (sizeof(film_sample_t)));
+
   for (volatile uint32_t i = 0; i < totalNumSamples; ++i) {
     volatile cd_film_sample_t sample = {0};
 
@@ -197,6 +197,16 @@ void film_sample_cache_new(binary_stream_t *stream, uint32_t totalNumSamples) {
     }
 
     newSample->length = sample.length;
+  }
+
+  uint32_t ringBuffSize = stream->sampleCache.ringBuffEnd - stream->sampleCache.ringBuffStart;
+  if (stream->sampleCache.samples[stream->sampleCache.currentBuffSample].length > ringBuffSize) {
+    sprintf((char *) LWRAM(80),
+      "Insufficient RingBuffer size: Allocated %d, required: %d\n",
+      ringBuffSize,
+      stream->sampleCache.samples[stream->sampleCache.currentBuffSample].length);
+  } else {
+    initRingBuffer(stream);
   }
 }
 
@@ -217,6 +227,8 @@ void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
   stream->sampleCache.numSamples = sampleCacheSize;
   stream->sampleCache.currentSample = 0;
   stream->eof = false;
+  stream->sampleCache.ringBuffEnd = (uint8_t *) sampleCache + sampleCacheSize;
+
 
   // Fetch first sectors
   const uint32_t sectorsReady =
@@ -259,6 +271,70 @@ void triggerDataRequest(binary_stream_t *stream) {
 
   stream->dataAvailable = sectorsReady * CDFS_SECTOR_SIZE;
   stream->remainingSectors -= sectorsReady;
+}
+
+void readBytesFromRingBuff(
+  binary_stream_t *stream, volatile uint16_t *destPtr, uint32_t len) {
+    memcpy(destPtr, stream->sampleCache.readPos, len);
+    stream->sampleCache.readPos += len;
+}
+
+void initRingBuffer(binary_stream_t* stream) {
+    film_sample_t nextSample = stream->sampleCache.samples[stream->sampleCache.currentBuffSample];
+
+    uint32_t ringBuffSize = stream->sampleCache.ringBuffEnd - stream->sampleCache.ringBuffStart;
+    while (ringBuffSize > 0) {
+        if (stream->sampleCache.writePos + nextSample.length >
+            stream->sampleCache.ringBuffEnd) {
+          stream->sampleCache.writePos = stream->sampleCache.ringBuffStart;
+            break;
+        } else {
+          stream_readbytes(stream, stream->sampleCache.writePos, nextSample.length);
+            stream->sampleCache.samples[stream->sampleCache.currentBuffSample].offset = stream->sampleCache.writePos;
+
+            stream->sampleCache.writePos += nextSample.length;
+            stream->sampleCache.currentBuffSample++;
+            nextSample = stream->sampleCache.samples[stream->sampleCache.currentBuffSample];
+        }
+    }
+
+
+}
+
+void readBytesIntoRingBuff(binary_stream_t* stream) {
+
+    film_sample_t nextSample = stream->sampleCache.samples[stream->sampleCache.currentBuffSample];
+    film_sample_t currentSample = stream->sampleCache.samples[stream->sampleCache.currentSample];
+
+    uint8_t * stopPoint = currentSample.offset;
+    if (currentSample.offset == 0) {
+      currentSample =
+        stream->sampleCache.samples[stream->sampleCache.currentSample - 1];
+        stopPoint = stream->sampleCache.ringBuffEnd;
+    }
+
+    if (stream->sampleCache.writePos + nextSample.length >
+        stream->sampleCache.ringBuffEnd) {
+      stream->sampleCache.writePos = stream->sampleCache.ringBuffStart; 
+    }
+
+    if (stream->sampleCache.currentBuffSample <=
+        stream->sampleCache.currentSample) {
+        stream->sampleCache.writePos = stream->sampleCache.ringBuffStart; 
+    }
+
+    uint8_t iter = 0;
+      while (iter < 1 && stream->sampleCache.writePos + nextSample.length < stopPoint) {
+        stream_readbytes(
+          stream, stream->sampleCache.writePos, nextSample.length);
+        stream->sampleCache.samples[stream->sampleCache.currentBuffSample]
+          .offset = stream->sampleCache.writePos;
+
+        stream->sampleCache.writePos += nextSample.length;
+        stream->sampleCache.currentBuffSample++;
+        nextSample = stream->sampleCache.samples[stream->sampleCache.currentBuffSample];
+        iter++;
+      }
 }
 
 void stream_readbytes(
@@ -310,19 +386,19 @@ void stream_skip(binary_stream_t *stream, uint32_t len) {
 
 uint16_t stream_read16(binary_stream_t *stream) {
   volatile uint16_t data;
-  stream_readbytes(stream, &data, 2);
+  readBytesFromRingBuff(stream, &data, 2);
 
   return data;
 }
 
 uint32_t stream_read32(binary_stream_t *stream) {
   volatile uint32_t data;
-  stream_readbytes(stream, &data, 4);
+  readBytesFromRingBuff(stream, &data, 4);
 
   return data;
 }
 
-inline uint32_t stream_pos(binary_stream_t *stream) { return stream->offset; }
+inline uint32_t stream_pos(binary_stream_t *stream) { return (uint32_t)stream->sampleCache.readPos; }
 
 inline bool film_sample_is_video(const film_sample_t *sample) {
   return sample->interval != 0xFFFFFFFF;
@@ -499,43 +575,50 @@ void renderPixel4(
 }
 
 void readVectors(decode_work_t *work, uint16_t chunkDataLength) {
-  uint32_t remainingSectionBytes = chunkDataLength - 4;
-
-  stream_readbytes(&work->stream, tmpBuffer, chunkDataLength);
-
+  uint32_t remainingSectionBytes = chunkDataLength;
+    //stream_readbytes(&work->stream, tmpBuffer, chunkDataLength);
   waitCopyingVideoFrame(work);
 
-  uint8_t *tmpData = tmpBuffer;
+ // uint8_t *tmpData = work->stream.sampleCache.readPos;
   uint32_t flags = 0;
   uint32_t shifts = 0;
   while (remainingSectionBytes &&
     work->stripData.writeY <= work->stripData.bottomY) {
-    memcpy(&flags, tmpData, 4);
-    tmpData += 4;
+    memcpy(&flags, work->stream.sampleCache.readPos, 4);
+    work->stream.sampleCache.readPos += 4;
     remainingSectionBytes -= 4;
 
     for (uint32_t i = 0; i < 32; i++) {
       if (flags & 0x80000000) {
         // V4
-        renderPixel4(work, tmpData[0], tmpData[1], tmpData[2], tmpData[3]);
+        renderPixel4(work, work->stream.sampleCache.readPos[0],
+          work->stream.sampleCache.readPos[1],
+          work->stream.sampleCache.readPos[2],
+          work->stream.sampleCache.readPos[3]);
         remainingSectionBytes -= 4;
-        tmpData += 4;
+        work->stream.sampleCache.readPos += 4;
 
       } else {
         // V1
-        renderPixel1(work, tmpData[0]);
+        renderPixel1(work, work->stream.sampleCache.readPos[0]);
         remainingSectionBytes -= 1;
-        tmpData += 1;
+        work->stream.sampleCache.readPos += 1;
       }
 
       stripdata_skipBlock(&work->stripData);
       flags <<= 1;
     }
   }
+
+  if (remainingSectionBytes) {
+    work->stream.sampleCache.readPos += remainingSectionBytes;
+    // stream_skip(&work->stream, remainingSectionBytes);
+  }
+
 }
 
 void readVectorsInter(decode_work_t *work, uint16_t chunkDataLength) {
-  stream_readbytes(&work->stream, tmpBuffer, chunkDataLength);
+ // stream_readbytes(&work->stream, tmpBuffer, chunkDataLength);
   waitCopyingVideoFrame(work);
 
   uint32_t remainingSectionBytes = chunkDataLength - 4;
@@ -543,9 +626,10 @@ void readVectorsInter(decode_work_t *work, uint16_t chunkDataLength) {
   // We keep reading flags as long as it is possible. We first read 4
   // bytes and then we start shifting them for the VLC. Once we reach
   // the end we try to read a new flag.
-  uint32_t flags = *((uint32_t *) tmpBuffer);
+  uint32_t flags;
+  memcpy(&flags, work->stream.sampleCache.readPos, 4);
+  work->stream.sampleCache.readPos += 4;
 
-  uint8_t *tmpData = tmpBuffer + 4;
   uint32_t shifts = 0;
   while (remainingSectionBytes) {
     // Running on VLC now, so we just keep consuming bytes (4 each time)
@@ -556,8 +640,8 @@ void readVectorsInter(decode_work_t *work, uint16_t chunkDataLength) {
       // We are at the last bit so we need to fetch the next flags and check
       // the first bit as if it was the next on this sequence.
       if (shifts == 31) {
-        memcpy(&flags, tmpData, 4);
-        tmpData += 4;
+        memcpy(&flags, work->stream.sampleCache.readPos, 4);
+        work->stream.sampleCache.readPos += 4;
         remainingSectionBytes -= 4;
 
         shifts = 0;
@@ -568,13 +652,16 @@ void readVectorsInter(decode_work_t *work, uint16_t chunkDataLength) {
 
       if (flags & 0x80000000) {
         // V4
-        renderPixel4(work, tmpData[0], tmpData[1], tmpData[2], tmpData[3]);
-        tmpData += 4;
+        renderPixel4(work, work->stream.sampleCache.readPos[0],
+          work->stream.sampleCache.readPos[1],
+          work->stream.sampleCache.readPos[2],
+          work->stream.sampleCache.readPos[3]);
+        work->stream.sampleCache.readPos += 4;
         remainingSectionBytes -= 4;
       } else {
         // V1
-        renderPixel1(work, tmpData[0]);
-        tmpData += 1;
+        renderPixel1(work, work->stream.sampleCache.readPos[0]);
+        work->stream.sampleCache.readPos += 1;
         remainingSectionBytes -= 1;
       }
     }
@@ -586,8 +673,8 @@ void readVectorsInter(decode_work_t *work, uint16_t chunkDataLength) {
       if (remainingSectionBytes < 4)
         break;
 
-      memcpy(&flags, tmpData, 4);
-      tmpData += 4;
+      memcpy(&flags, work->stream.sampleCache.readPos, 4);
+      work->stream.sampleCache.readPos += 4;
       remainingSectionBytes -= 4;
 
       shifts = 0;
@@ -595,6 +682,11 @@ void readVectorsInter(decode_work_t *work, uint16_t chunkDataLength) {
       flags <<= 1;
       shifts++;
     }
+  }
+
+ if (remainingSectionBytes) {
+    work->stream.sampleCache.readPos += remainingSectionBytes;
+    // stream_skip(&work->stream, remainingSectionBytes);
   }
 }
 
@@ -615,21 +707,19 @@ void readV1VectorsInChunk(decode_work_t *work, uint16_t chunkDataLength) {
 
   waitCopyingVideoFrame(work);
 
-  while (readBytes > 0) {
-    const uint32_t readNow = MIN(readBytes, TMP_BUFFER_SIZE);
+   for (volatile uint32_t i = 0; i < readBytes; ++i) {
+    const uint8_t c0 = work->stream.sampleCache.readPos[i];
+    renderPixel1(work, c0);
+    stripdata_skipBlock(&work->stripData);
+  }
+  work->stream.sampleCache.readPos += readBytes;
 
-    stream_readbytes(&work->stream, tmpBuffer, readNow);
-    for (volatile uint32_t i = 0; i < readNow; ++i) {
-      const uint8_t c0 = tmpBuffer[i];
-      renderPixel1(work, c0);
-      stripdata_skipBlock(&work->stripData);
-    }
 
-    readBytes -= readNow;
+  if (remainingSectionBytes) {
+    work->stream.sampleCache.readPos += remainingSectionBytes;
+    // stream_skip(&work->stream, remainingSectionBytes);
   }
 
-  if (remainingSectionBytes)
-    stream_skip(&work->stream, remainingSectionBytes);
 }
 
 void readChunk(
@@ -651,7 +741,7 @@ void readChunk(
       codebookRGBPtr = stripdata_getV1CodebookRGB(&work->stripData);
     }
 
-    stream_readbytes(&work->stream, codebookPtr, chunkDataLength);
+    readBytesFromRingBuff(&work->stream, codebookPtr, chunkDataLength);
     uint32_t iter = 0;
     for (int32_t i = chunkDataLength; i >= 6; i -= 6) {
       codebookRGB_new(&codebookPtr[iter], &codebookRGBPtr[iter]);
@@ -691,8 +781,10 @@ void readChunk(
       }
     }
 
-    if (remainingSectionBytes)
-      stream_skip(&work->stream, remainingSectionBytes);
+    if (remainingSectionBytes) {
+      work->stream.sampleCache.readPos += remainingSectionBytes;   
+      // stream_skip(&work->stream, remainingSectionBytes);
+    }
 
   } break;
 
@@ -720,7 +812,7 @@ void readChunk(
     break;
 
   default: {
-    const uint32_t chunkIdPos = stream_pos(&work->stream) - 4;
+    const uint32_t chunkIdPos = work->stream.sampleCache.readPos - 4;
 
     uint16_t *vdp2Image15Ptr = work->decodeParams->vramBuffAddr;
     uint32_t *vdp2ImagePtr = work->decodeParams->vramBuffAddr;
@@ -729,9 +821,8 @@ void readChunk(
     } else {
       memset(vdp2ImagePtr, 0, VIDEO_WIDTH * VIDEO_HEIGHT * sizeof(uint32_t));
     }
-    logMessage("Unknown chunk id 0x%X at offset %d\n", chunkID, chunkIdPos);
-    work->stream.sampleCache.currentSample--;
-    sprintf((char *) LWRAM(80), "Unknown chunk id 0x%X at offset %d\n", chunkID,
+    logMessage("Unknown chunk id 0x%X at offset 0x%X\n", chunkID, chunkIdPos);
+    sprintf((char *) LWRAM(80), "Unknown chunk id 0x%X at offset 0x%X\n", chunkID,
       chunkIdPos);
 
     break;
@@ -755,7 +846,7 @@ void parseVideo(decode_work_t *work) {
   static_assert(sizeof(videoHeader) == 12);
 
   volatile videoHeader cvidHeader;
-  stream_readbytes(
+  readBytesFromRingBuff(
     &work->stream, CAST_DATA16(&cvidHeader), sizeof(videoHeader));
 
   const bool copyLastCodeBooks = !(cvidHeader.flagsAndCvidLength.b[0] & 0x1);
@@ -770,7 +861,7 @@ void parseVideo(decode_work_t *work) {
     }
 
     volatile uint16_t tmpStripBuffer[6];
-    stream_readbytes(
+    readBytesFromRingBuff(
       &work->stream, CAST_DATA32(tmpStripBuffer), 6 * sizeof(uint16_t));
 
     const uint16_t stripDataLength = tmpStripBuffer[1];
@@ -786,11 +877,10 @@ void parseVideo(decode_work_t *work) {
     }
 
     // Read the strip chunks
-    const uint32_t stripLimit =
-      stream_pos(&work->stream) + stripDataLength - 12;
+    const uint32_t stripLimit = work->stream.sampleCache.readPos + stripDataLength - 12;
     lastBottomY = work->stripData.bottomY;
 
-    while (stream_pos(&work->stream) < stripLimit) {
+    while (work->stream.sampleCache.readPos < stripLimit) {
       const uint16_t cvidChunkID = stream_read16(&work->stream);
       const uint16_t cvidChunkDataLength = stream_read16(&work->stream) - 4;
 
@@ -811,20 +901,26 @@ void parseAudio(
   // TODO: Proper stereo
   if (work->filmHeader.fdsc.sound_channels == 2) {
     length >>= 1;
-    stream_skip(stream, sample->length - length);
+    work->stream.sampleCache.readPos += sample->length - length;
+
+    //stream_skip(stream, sample->length - length);
   }
 
   uint32_t missingBytes = length;
   while (missingBytes > 0) {
-    uint32_t readSize = MIN(film_audio_get_next_buffer_size(), missingBytes);
+    uint32_t readSize = film_audio_get_next_buffer_size();
+    if (readSize > missingBytes) {
+      readSize = missingBytes;
+    }
     uint16_t *writeLocation = film_audio_get_next_buffer_ptr(0);
 
-    stream_readbytes(stream, writeLocation, readSize);
+    readBytesFromRingBuff(stream, writeLocation, readSize);
     film_audio_notify_read_buffer_bytes(readSize);
     missingBytes -= readSize;
   }
 
-  film_audio_play(length);
+    film_audio_play(0);
+
 }
 
 void initialize_film() {}
@@ -896,6 +992,7 @@ void handle_play(decode_work_t *work) {
   if (work->stream.sampleCache.currentSample <
     work->stream.sampleCache.numSamples) {
     work->nextSample = film_sample_get_next_sample(&work->stream.sampleCache);
+    work->stream.sampleCache.readPos = work->nextSample.offset;
     bool isVideo = film_sample_is_video(&work->nextSample);
 
     work->timeEllapsed = frtTimerEllapsed();
@@ -915,10 +1012,20 @@ void handle_play(decode_work_t *work) {
     } else {
       parseAudio(&work->nextSample, &work->stream, work);
     }
+    readBytesIntoRingBuff(&work->stream);
 
     while (isVideo && work->tickCount < work->ticksUntilNextFrame) {
+      /* work->nextSample =
+        film_sample_get_next_sample(&work->stream.sampleCache);
+      if (!film_sample_is_video(&work->nextSample)) {
+        work->stream.sampleCache.currentSample--;
+        parseAudio(&work->nextSample, &work->stream, work);
+        readBytesIntoRingBuff(&work->stream);
+      } else {
+        work->stream.sampleCache.currentSample--;
+      }*/
       work->timeEllapsed = frtTimerEllapsed();
-      uint32_t deltaTime = work->timeEllapsed - work->lastFrameTime;
+      deltaTime = work->timeEllapsed - work->lastFrameTime;
       if (deltaTime > 0) {
         work->lastFrameTime = work->timeEllapsed;
         work->tickCount += deltaTime;
@@ -927,6 +1034,7 @@ void handle_play(decode_work_t *work) {
     if (isVideo) {
       work->isDisplayReady = true;
     }
+
 
   } else {
     work->play_status = END;

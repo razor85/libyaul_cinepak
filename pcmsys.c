@@ -265,7 +265,7 @@ void pcmStreamInitialize() {
 void pcmStreamConfigure(uint8_t channels, uint8_t bits, uint16_t frequency) {
   pcmStream.numChannels = channels;
 
-  uint32_t bufferSize = pcmStreamBufferSize(bits, frequency);
+  uint32_t bufferSize = getSlotSize();
   for (uint32_t i = 0; i < channels; ++i) {
     if (bits == 8) {
       pcmsys_load_8bit_pcm_slot(bufferSize, frequency, i,
