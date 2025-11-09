@@ -95,6 +95,75 @@
 #define ADX_2304_COEF_1 (6631)
 #define ADX_2304_COEF_2 (-2685)
 
+// From yabause docs: at start + 0x00100408
+// 1111 1222 2334 4444 1:MSLC monitor slot 2:CA call address 3:SGC Slot phase
+// 4:EG Slot envelope
+typedef struct {
+  unsigned int monitorSlot : 5;
+  unsigned int callAddress : 4;
+  unsigned int slotPhase : 2;
+  unsigned int slotEnvelope : 5;
+} __packed SoundMonitorSlotRegister;
+
+// $42a ---- -111 1111 1111 1:MCIEB allow main cpu interrupt
+// $42c ---- -111 1111 1111 1:MCIPD request main cpu interrupt
+// $42e ---- -111 1111 1111 1:MCIRE reset main cpu interrupt
+typedef struct {
+  unsigned int : 5;
+  unsigned int sampleFs : 1;
+  unsigned int midiOut : 1;
+  unsigned int timerC : 1;
+  unsigned int timerB : 1;
+  unsigned int timerA : 1;
+  unsigned int cpu : 1;
+  unsigned int dmaTransferEnd : 1;
+  unsigned int midiInput : 1;
+  unsigned int int2n : 1;
+  unsigned int int1n : 1;
+  unsigned int int0n : 1;
+} __packed SoundCpuInterrupt;
+
+// ---- -111 2222 2222 1:TACTL timer a prescalar control 2:TIMA timer a count
+// data
+// ---- -111 2222 2222 1:TBCTL timer b prescalar control 2:TIMB timer b count
+// data
+// ---- -111 2222 2222 2:TCCTL timer c prescalar control 2:TIMC timer c count
+// data
+typedef struct  {
+  unsigned int : 5;
+  unsigned int prescalerControl : 3;
+  unsigned int countData : 8;
+} __packed SoundTimer;
+
+typedef enum : uint8_t {
+  EverySamples1 = 0,
+  EverySamples2,
+  EverySamples4,
+  EverySamples8,
+  EverySamples16,
+  EverySamples32,
+  EverySamples64,
+  EverySamples128,
+} IncrementCycle;
+
+static void setIncrement(volatile SoundTimer *timer, IncrementCycle cycle) {
+  timer->prescalerControl = (int) cycle;
+}
+
+static volatile SoundMonitorSlotRegister *SndMonitorSlotRegister = (volatile SoundMonitorSlotRegister *) (SNDRAM + 0x00100408);
+
+static volatile SoundTimer *SndTimerRegisterA = (volatile SoundTimer *)(SNDRAM + 0x00100418);
+
+static volatile SoundTimer *SndTimerRegisterB =(volatile SoundTimer *)(SNDRAM + 0x0010041A);
+
+static volatile SoundTimer *SndTimerRegisterC = (volatile SoundTimer *)(SNDRAM + 0x0010041C);
+
+static volatile SoundCpuInterrupt *SndCpuInterruptEnable = (volatile SoundCpuInterrupt *)(SNDRAM + 0x0010042A);
+
+static volatile SoundCpuInterrupt *SndCpuInterruptPending = (volatile SoundCpuInterrupt *)(SNDRAM + 0x0010042C);
+
+static volatile SoundCpuInterrupt *SndCpuInterruptReset = (volatile SoundCpuInterrupt *)(SNDRAM + 0x0010042E);
+
 typedef struct {
   // [0,1,2,3] No loop, normal loop, reverse loop, alternating loop
   char loopType;

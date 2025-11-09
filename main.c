@@ -8,18 +8,25 @@ static void _vblank_in_handler(void *work __unused);
 
 static void _vblank_out_handler(void *work __unused);
 
+static void _scu_timer_0_handler(void);
+
 static smpc_peripheral_digital_t pad0;
 
 static cdfs_filelist_t filelist;
 
+volatile bool g_vbl_in = false;
+
+volatile bool g_time_on = false;
+
 uint32_t work_area[sizeof(decode_work_t)];
+
+uint32_t *vdp2DestinationBuffer = (uint32_t *) VDP2_VRAM_ADDR(0, 0);
 
 #define MOVIE_LIST_ENTRIES 40
 
 #define VIDEO_WIDTH       320
 #define VIDEO_HEIGHT      240
-#define SAMPLE_CACHE_SIZE 10000
-#define AUDIO_CACHE_SIZE  (4096 * 16)
+#define SAMPLE_CACHE_SIZE 14000
 
 film_sample_t sampleCache[SAMPLE_CACHE_SIZE];
 
@@ -44,17 +51,23 @@ uint8_t *soundMemory = NULL;
 uint8_t *soundMemoryLimit = NULL;
 
 uint32_t film_audio_get_next_buffer_size() {
-  return (uint32_t)(soundMemoryLimit - soundMemory);
+  uint32_t size = (uint32_t)(soundMemoryLimit - soundMemory);
+  if (size == 0) {
+    soundMemory = baseSoundMemory;
+    size = (uint32_t)(soundMemoryLimit - soundMemory);
+  }
+  return size;
 }
 
 uint16_t *film_audio_get_next_buffer_ptr(uint8_t slot) {
+  
   return (uint16_t *) soundMemory + (slot * getSlotSize());
 }
 
 void film_audio_notify_read_buffer_bytes(uint32_t length) {
   soundMemory += length;
 
-  if (soundMemory == soundMemoryLimit) {
+  if (soundMemory >= soundMemoryLimit) {
     soundMemory = baseSoundMemory;
   }
 }
@@ -64,12 +77,15 @@ void film_audio_play(uint32_t bufferLength __unused) {
   sound_notify_driver();
 }
 
-void film_audio_setup(uint16_t frequency, uint32_t channels, uint32_t numBits) {
+void film_audio_setup(decode_work_t *work, uint16_t frequency, uint32_t channels, uint32_t numBits) {
   // TODO: Proper stereo
   pcmStreamConfigure(channels == 2 ? 1 : 1, numBits, frequency);
   baseSoundMemory = getSlotAddress(0);
   soundMemory = baseSoundMemory;
   soundMemoryLimit = baseSoundMemory + getSlotSize();
+  work->decodeParams->audioBufferAddr = getSlotAddress(0);
+  work->decodeParams->audioBufferSize = getSlotSize();
+  work->stream.sampleCache.pcmPlayPosition = getSlotAddress(0);
 }
 
 void film_audio_prepare_to_play() {}
@@ -101,6 +117,167 @@ void loadSoundDriver() {
 
   pcmsys_load_driver((void *) soundDriverData, soundDriverEntry->size);
   pcmStreamInitialize();
+}
+
+
+#define SMPCPK_VBL_COPY_MAX (352 * 120)
+/*  RAM cycle pattern (bank A0) register */
+#define CYCLE_A_REG 0x25f80010
+
+/*  VRAM cycle pattern (bank B0) register */
+#define CYCLE_B_REG 0x25f80018
+
+/* Turn on CPU read/write mode */
+#define CYCLE_CPU_WRITE(reg_addr) \
+  { *((uint32_t *) (reg_addr)) = 0xeeeeeeee; }
+
+/* Set to character pattern data read mode */
+#define CYCLE_VDP_READ(reg_addr) \
+  { *((uint32_t *) (reg_addr)) = 0x44444444; }
+
+/* 1/2 */
+#define SMP_DIV2(a) ((a) >> 1)
+#define SCL_MAXLINE 512
+void copyVideoFrame2(decode_work_t *work) {
+
+  uint32_t movie_x = work->filmHeader.fdsc.width;
+  uint32_t movie_y = work->filmHeader.fdsc.height;
+  uint32_t *src = work->decodeParams->vramBuffAddr;
+  uint32_t *dst = vdp2DestinationBuffer;
+  int32_t copy_size;
+  
+  if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+    copy_size = 2 * movie_x;
+  } else {
+    copy_size = 4 * movie_x;
+  }
+
+    uint32_t *src_stop1 = src + movie_x * SMP_DIV2(movie_y);
+    uint32_t *src_stop2 = src + movie_x * movie_y;
+
+	g_time_on = false;
+	while (g_time_on == false) ;
+	g_vbl_in = false;
+
+    /* Set bank A0 to CPU write mode */
+	CYCLE_CPU_WRITE(CYCLE_A_REG);
+
+	while (src < src_stop1) {
+    DMA_ScuMemCopy(dst, src, copy_size);
+		src += movie_x;
+    if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+			dst += SMP_DIV2(SCL_MAXLINE);
+		} else {
+			dst += SCL_MAXLINE;
+        }
+	}
+
+	/* Make bank A0 a character pattern data read. */
+	CYCLE_VDP_READ(CYCLE_A_REG);
+
+	/* Bottom half transfer  */
+	while (g_vbl_in == false);
+
+	/* Set bank B0 to CPU write mode */
+	CYCLE_CPU_WRITE(CYCLE_B_REG);
+
+	while (src < src_stop2) {
+		DMA_ScuMemCopy(dst, src, copy_size);
+		src += movie_x;
+    if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+			dst += SMP_DIV2(SCL_MAXLINE);
+		} else {
+			dst += SCL_MAXLINE;
+        }
+		
+	}
+	/* Make bank B0 a character pattern data read. */
+	CYCLE_VDP_READ(CYCLE_B_REG);
+  
+}
+
+void copyVideoFrame1(decode_work_t *work) {
+  uint32_t movie_x = work->filmHeader.fdsc.width;
+  uint32_t movie_y = work->filmHeader.fdsc.height;
+  uint32_t *src = work->decodeParams->vramBuffAddr;
+  uint32_t *dst = vdp2DestinationBuffer;
+  int32_t copy_size;
+
+  if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+    copy_size = 2 * movie_x;
+  } else {
+    copy_size = 4 * movie_x;
+  }
+
+  uint32_t *src_stop1 = src + movie_x * SMP_DIV2(movie_y);
+  uint32_t *src_stop2 = src + movie_x * movie_y;
+
+  g_time_on = false;
+  while (g_time_on == false);
+  g_vbl_in = false;
+
+  /* Set bank A0 to CPU write mode */
+  CYCLE_CPU_WRITE(CYCLE_A_REG);
+
+  while (src < src_stop1) {
+    DMA_ScuMemCopy(dst, src, copy_size);
+    src += movie_x;
+    if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+      dst += SMP_DIV2(SCL_MAXLINE);
+    } else {
+      dst += SCL_MAXLINE;
+    }
+  }
+
+  /* Make bank A0 a character pattern data read. */
+  CYCLE_VDP_READ(CYCLE_A_REG);
+  
+	/* Bottom half transfer */
+    /*Don't wait, transfer all at once during Vbl. */
+    /* while (g_vbl_in == FALSE); */
+
+  /* Set bank B0 to CPU write mode */
+  CYCLE_CPU_WRITE(CYCLE_B_REG);
+
+  while (src < src_stop2) {
+    DMA_ScuMemCopy(dst, src, copy_size);
+    src += movie_x;
+    if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+      dst += SMP_DIV2(SCL_MAXLINE);
+    } else {
+      dst += SCL_MAXLINE;
+    }
+  }
+  /* Make bank B0 a character pattern data read. */
+  CYCLE_VDP_READ(CYCLE_B_REG);
+}
+
+#define SMPCPK_VBL_COPY_MAX (352 * 120)
+void copyVideoFrame(decode_work_t *work) {
+
+    if (work->filmHeader.fdsc.width * work->filmHeader.fdsc.height <= SMPCPK_VBL_COPY_MAX) {
+        copyVideoFrame1(work);
+    } else {
+        //This should need to be split between blanks, but it seems to work without doing this.
+        //copyVideoFrame2(work);
+        copyVideoFrame1(work);
+    }
+
+}
+
+void DMA_ScuMemCopy(void *dst, void *src, uint32_t cnt) {
+
+     const scu_dma_handle_t dma_handle = {.dnr =
+                                         CPU_CACHE_THROUGH | (uintptr_t) src,
+    .dnw = CPU_CACHE_THROUGH | (uintptr_t) dst,
+    .dnc = cnt,
+    .dnad = 0x00000101,
+    .dnmd = 0x00000000};
+
+     scu_dma_config_set(0, SCU_DMA_START_FACTOR_ENABLE, &dma_handle, NULL);
+     scu_dma_level_fast_start(0);
+     cpu_cache_purge();
+
 }
 
 int main() {
@@ -136,12 +313,14 @@ int main() {
 
   decode_work_t *cpk = &work_area;
   decode_param_t params;
+  scu_timer_t0_value_set(122);
+  scu_timer_t0_set(_scu_timer_0_handler);
+  scu_timer_enable();
 
+  vdp2_sync();
   while (true) {
     smpc_peripheral_process();
     smpc_peripheral_digital_port(1, &pad0);
-
-    clearLog();
 
     if (movieSelected == false) {
       for (uint32_t i = 0; i < numMovieEntries; ++i) {
@@ -166,11 +345,16 @@ int main() {
         restart = true;
       }
 
-    } else {
-      clearLog();
       dbgio_flush();
+      clearLog();
+      vdp2_sync();
+      vdp2_sync_wait();
+    } else {
 
       if (restart == true) {
+        dbgio_flush();
+        vdp2_sync();
+        vdp2_sync_wait();
         sprintf((char *) LWRAM(80), "FILM INIT START");
 
         memset(&sampleCache, 0, SAMPLE_CACHE_SIZE * sizeof(film_sample_t));
@@ -181,16 +365,20 @@ int main() {
         params.vramBuffAddr = &decode_buffer;
         params.vramBufferWidth = VIDEO_WIDTH;
         params.vramBuffSize = (VIDEO_WIDTH * VIDEO_HEIGHT) * 4;
-        params.pcmVolume = 7;
-        params.pcmChannels = 2;
-        params.pcmPan = 16;
-        params.audioBufferAddr = getSlotAddress(0);
-        params.audioBufferSize = pcmStreamBufferSize(16, 22050);
+        params.decodeColorDepth = COLOR_DEPTH_24;
+        //Currently not used, eventually should use these and set them to what's in the FILM Header. 
+        //params.pcmVolume = 7;
+        //params.pcmChannels = 2;
+        //params.pcmPan = 16;
+        // Currently not used, should be used eventually to allow the user to define what slots and addresses to use for audio.
+        //params.audioBufferAddr = getSlotAddress(0);
+        //params.audioBufferSize = pcmStreamBufferSize(16, 22050);
 
         cpk->decodeParams = &params;
         cpk->play_status = 0;
 
-        init_film(movieEntries[0], cpk, 240, 320);
+        init_film(movieEntries[menuSelection], cpk, 240, 320);
+
         cpk_play(cpk);
 
         restart = false;
@@ -215,9 +403,6 @@ int main() {
       }
     }
 
-    dbgio_flush();
-    vdp2_sync();
-    vdp2_sync_wait();
   }
 }
 
@@ -282,14 +467,16 @@ void user_init(void) {
     .interval = 0,
     .type = VDP2_SCRN_LS_TYPE_HORZ | VDP2_SCRN_LS_TYPE_VERT};
 
-  vdp2_scrn_ls_set(&ls_format);
+  //vdp2_scrn_ls_set(&ls_format);
 
   const vdp2_scrn_vcs_format_t vcs_format = {.scroll_screen = VDP2_SCRN_NBG0,
     .table_base = NBG0_VCS};
 
-  vdp2_scrn_vcs_set(&vcs_format);
+  //Undid the line scroll stuff for now to make the DMA easier to figure out.
 
-  volatile uint32_t *horizontalCoordinates =
+  //vdp2_scrn_vcs_set(&vcs_format);
+
+  /* volatile uint32_t *horizontalCoordinates =
     (volatile uint32_t *) NBG0_LINE_SCROLL;
   const uint32_t scrollMask = 0x01ff0000; // Integer part
   for (volatile uint32_t n = 0; n < 240; ++n) {
@@ -315,7 +502,7 @@ void user_init(void) {
       const uint32_t cellScrollValue = 1024 * cellW;
       verticalCoordinates[n * numCells + cellW] = cellScrollValue;
     }
-  }
+  }*/
 
   vdp2_tvmd_display_res_set(
     VDP2_TVMD_INTERLACE_NONE, VDP2_TVMD_HORZ_NORMAL_A, VDP2_TVMD_VERT_240);
@@ -341,8 +528,10 @@ void user_init(void) {
   scu_ic_mask_chg(SCU_IC_MASK_ALL, SCU_IC_MASK_HBLANK_IN);
 }
 
-static void _vblank_in_handler(void *work __unused) {}
+static void _vblank_in_handler(void *work __unused) { g_vbl_in = true;}
 
 static void _vblank_out_handler(void *work __unused) {
   smpc_peripheral_intback_issue();
 }
+
+_scu_timer_0_handler(void) { g_time_on = true; }

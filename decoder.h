@@ -3,17 +3,10 @@
 
 #include "base.h"
 
-#define FILM_SAMPLE_START_OFFSET 64
 #define SECTORS_PREFETCH         8
 
-// 0 if video, 1 if audio.
-#define FILM_SAMPLE_CHECK_BIT 0x80000000
-
-#define ASCII_FILM 1179208781 // 'FILM'
-#define ASCII_1d09 825110585  // '1.09'
-#define ASCII_FDSC 1178882883 // 'FDSC'
-#define ASCII_CVID 1668704612 // 'cvid'
-#define ASCII_STAB 1398030658 // 'STAB'
+#define COLOR_DEPTH_15 15
+#define COLOR_DEPTH_24 24
 
 #define MAX_STRIPS 2
 
@@ -33,13 +26,10 @@ typedef struct {
 } codebook_t;
 
 typedef struct {
-  uint16_t color[4];
-  uint32_t color24[4];
+  uint32_t color[4];
 } codebookRGB_t;
 
 typedef struct {
-  codebook_t v1[256];
-  codebook_t v4[256];
   codebookRGB_t v1RGB[256];
   codebookRGB_t v4RGB[256];
 } __aligned(16) strip_codebook_t;
@@ -67,12 +57,15 @@ typedef struct {
   uint32_t numSamples;
   uint32_t currentSample;
   uint32_t currentBuffSample;
+  uint32_t pcmBytesPerBlank;
+  uint32_t remainingPcmBytes;
+  uint32_t pcmPlayPosition;
   uint8_t *ringBuffStart;
   uint8_t *ringBuffEnd;
   uint8_t *writePos;
   uint8_t *readPos;
   film_sample_t *samples;
-} film_sample_cache_t;
+} __packed __aligned(4) film_sample_cache_t;
 
 typedef struct {
   uint32_t startFAD;
@@ -86,7 +79,7 @@ typedef struct {
 
   bool eof;
 
-} binary_stream_t;
+} __packed __aligned(4) binary_stream_t;
 
 typedef struct {
   strip_codebook_t codebooks[MAX_STRIPS];
@@ -150,16 +143,18 @@ typedef struct {
   uint16_t vramBufferWidth;
   uint32_t audioBufferAddr;
   uint32_t audioBufferSize;
+  uint8_t decodeColorDepth;
   bool audioEnable;
   uint8_t pcmChannels;
   uint8_t pcmVolume;
   uint8_t pcmPan;
-} __aligned(4) decode_param_t;
+} __packed __aligned(4) decode_param_t;
 
 typedef struct {
   decode_param_t *decodeParams;
   playback_status_t play_status;
   bool isDisplayReady;
+  bool displayWaiting;
   uint32_t timeEllapsed;
   uint32_t frtOverflowCount;
   uint32_t ticksUntilNextFrame;
@@ -168,11 +163,13 @@ typedef struct {
   uint32_t copyingVideoFrame;
   uint32_t videoStartY;
   uint32_t dma_delta;
+  bool audioPlaying;
+  bool audioWaitingToStart;
   film_header filmHeader;
   binary_stream_t stream;
   film_sample_t nextSample;
   stripdata_t stripData;
-} __aligned(4) decode_work_t;
+} __packed __aligned(4) decode_work_t;
 
 extern void initialize_film();
 
@@ -184,7 +181,7 @@ extern void film_audio_notify_read_buffer_bytes(uint32_t length);
 
 extern void film_audio_play(uint32_t bufferLength);
 
-extern void film_audio_setup(
+extern void film_audio_setup(decode_work_t *work, 
   uint16_t frequency, uint32_t numChannels, uint32_t sampleResolution);
 
 extern void film_audio_prepare_to_play();
@@ -203,6 +200,7 @@ extern bool cpk_display_ready(decode_work_t *work);
 
 extern void cpk_display_finished(decode_work_t *work);
 
-extern void copyVideoFrame(decode_work_t *work);
+extern void cpk_vbl_task();
+
 
 #endif // DECODER_H
