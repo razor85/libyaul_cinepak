@@ -26,7 +26,7 @@ uint32_t *vdp2DestinationBuffer = (uint32_t *) VDP2_VRAM_ADDR(0, 0);
 
 #define VIDEO_WIDTH       320
 #define VIDEO_HEIGHT      240
-#define SAMPLE_CACHE_SIZE 14000
+#define SAMPLE_CACHE_SIZE 24000
 
 film_sample_t sampleCache[SAMPLE_CACHE_SIZE];
 
@@ -50,7 +50,7 @@ uint8_t *baseSoundMemory = NULL;
 uint8_t *soundMemory = NULL;
 uint8_t *soundMemoryLimit = NULL;
 
-uint32_t film_audio_get_next_buffer_size() {
+inline uint32_t film_audio_get_next_buffer_size() {
   uint32_t size = (uint32_t)(soundMemoryLimit - soundMemory);
   if (size == 0) {
     soundMemory = baseSoundMemory;
@@ -59,12 +59,12 @@ uint32_t film_audio_get_next_buffer_size() {
   return size;
 }
 
-uint16_t *film_audio_get_next_buffer_ptr(uint8_t slot) {
+inline uint16_t *film_audio_get_next_buffer_ptr(uint8_t slot) {
   
   return (uint16_t *) soundMemory + (slot * getSlotSize());
 }
 
-void film_audio_notify_read_buffer_bytes(uint32_t length) {
+inline void film_audio_notify_read_buffer_bytes(uint32_t length) {
   soundMemory += length;
 
   if (soundMemory >= soundMemoryLimit) {
@@ -72,7 +72,7 @@ void film_audio_notify_read_buffer_bytes(uint32_t length) {
   }
 }
 
-void film_audio_play(uint32_t bufferLength __unused) {
+inline void film_audio_play(uint32_t bufferLength __unused) {
   pcmStreamPlay(7);
   sound_notify_driver();
 }
@@ -138,15 +138,11 @@ void loadSoundDriver() {
 /* 1/2 */
 #define SMP_DIV2(a) ((a) >> 1)
 #define SCL_MAXLINE 512
-void copyVideoFrame2(decode_work_t *work) {
+void copyVideoFrame2(uint32_t movie_x, uint32_t movie_y, uint32_t *src, uint32_t *dst, uint8_t color_depth) {
 
-  uint32_t movie_x = work->filmHeader.fdsc.width;
-  uint32_t movie_y = work->filmHeader.fdsc.height;
-  uint32_t *src = work->decodeParams->vramBuffAddr;
-  uint32_t *dst = vdp2DestinationBuffer;
   int32_t copy_size;
   
-  if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+  if (color_depth == COLOR_DEPTH_15) {
     copy_size = 2 * movie_x;
   } else {
     copy_size = 4 * movie_x;
@@ -165,7 +161,7 @@ void copyVideoFrame2(decode_work_t *work) {
 	while (src < src_stop1) {
     DMA_ScuMemCopy(dst, src, copy_size);
 		src += movie_x;
-    if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+    if (color_depth == COLOR_DEPTH_15) {
 			dst += SMP_DIV2(SCL_MAXLINE);
 		} else {
 			dst += SCL_MAXLINE;
@@ -184,7 +180,7 @@ void copyVideoFrame2(decode_work_t *work) {
 	while (src < src_stop2) {
 		DMA_ScuMemCopy(dst, src, copy_size);
 		src += movie_x;
-    if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+    if (color_depth == COLOR_DEPTH_15) {
 			dst += SMP_DIV2(SCL_MAXLINE);
 		} else {
 			dst += SCL_MAXLINE;
@@ -196,14 +192,10 @@ void copyVideoFrame2(decode_work_t *work) {
   
 }
 
-void copyVideoFrame1(decode_work_t *work) {
-  uint32_t movie_x = work->filmHeader.fdsc.width;
-  uint32_t movie_y = work->filmHeader.fdsc.height;
-  uint32_t *src = work->decodeParams->vramBuffAddr;
-  uint32_t *dst = vdp2DestinationBuffer;
+void copyVideoFrame1(uint32_t movie_x, uint32_t movie_y, uint32_t *src, uint32_t *dst, uint8_t color_depth) {
   int32_t copy_size;
 
-  if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+  if (color_depth == COLOR_DEPTH_15) {
     copy_size = 2 * movie_x;
   } else {
     copy_size = 4 * movie_x;
@@ -222,7 +214,7 @@ void copyVideoFrame1(decode_work_t *work) {
   while (src < src_stop1) {
     DMA_ScuMemCopy(dst, src, copy_size);
     src += movie_x;
-    if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+    if (color_depth == COLOR_DEPTH_15) {
       dst += SMP_DIV2(SCL_MAXLINE);
     } else {
       dst += SCL_MAXLINE;
@@ -242,7 +234,7 @@ void copyVideoFrame1(decode_work_t *work) {
   while (src < src_stop2) {
     DMA_ScuMemCopy(dst, src, copy_size);
     src += movie_x;
-    if (work->decodeParams->decodeColorDepth == COLOR_DEPTH_15) {
+    if (color_depth == COLOR_DEPTH_15) {
       dst += SMP_DIV2(SCL_MAXLINE);
     } else {
       dst += SCL_MAXLINE;
@@ -253,14 +245,13 @@ void copyVideoFrame1(decode_work_t *work) {
 }
 
 #define SMPCPK_VBL_COPY_MAX (352 * 120)
-void copyVideoFrame(decode_work_t *work) {
-
-    if (work->filmHeader.fdsc.width * work->filmHeader.fdsc.height <= SMPCPK_VBL_COPY_MAX) {
-        copyVideoFrame1(work);
+void copyVideoFrame(uint32_t movie_x, uint32_t movie_y, uint32_t *src, uint32_t *dst, uint8_t color_depth) {
+    if (movie_x * movie_y <= SMPCPK_VBL_COPY_MAX) {
+        copyVideoFrame1(movie_x, movie_y, src, dst, color_depth);
     } else {
         //This should need to be split between blanks, but it seems to work without doing this.
-        //copyVideoFrame2(work);
-        copyVideoFrame1(work);
+        //copyVideoFrame2(movie_x, movie_y, src, dst, color_depth);
+      copyVideoFrame1(movie_x, movie_y, src, dst, color_depth);
     }
 
 }
@@ -386,8 +377,14 @@ int main() {
 
       cpk_task(cpk);
 
-      if (cpk_display_ready(cpk) == true) {
-        copyVideoFrame(cpk);
+      if (cpk->isDisplayReady == true) {
+        uint32_t movie_x = cpk->filmHeader.fdsc.width;
+        uint32_t movie_y = cpk->filmHeader.fdsc.height;
+        uint32_t *src = cpk->decodeParams->vramBuffAddr;
+        uint32_t *dst = vdp2DestinationBuffer;
+        uint8_t colorDepth = cpk->filmHeader.fdsc.color_depth;
+
+        copyVideoFrame(movie_x, movie_y, src, dst, colorDepth);
         cpk_display_finished(cpk);
       }
 

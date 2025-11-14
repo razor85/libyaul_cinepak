@@ -170,9 +170,7 @@ typedef struct {
   film_sample_t nextSample;
   stripdata_t stripData;
 } __packed __aligned(4) decode_work_t;
-
-extern void initialize_film();
-
+ 
 extern uint32_t film_audio_get_next_buffer_size();
 
 extern uint16_t *film_audio_get_next_buffer_ptr(uint8_t slot);
@@ -196,7 +194,7 @@ extern void cpk_play(decode_work_t *work);
 
 extern void cpk_task(decode_work_t *work);
 
-extern bool cpk_display_ready(decode_work_t *work);
+extern inline bool cpk_display_ready(decode_work_t *work);
 
 extern void cpk_display_finished(decode_work_t *work);
 

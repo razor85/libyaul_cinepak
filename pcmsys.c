@@ -169,7 +169,7 @@ short convert_bitrate_to_pitchword(uint16_t sampleRate) {
   return PCM_SET_PITCH_WORD(octr, fnsr);
 }
 
-uint32_t getSlotAddressOffset(uint32_t slot) {
+inline uint32_t getSlotAddressOffset(uint32_t slot) {
   // Start past 64kb of the start of sound memory (to allow room for driver +
   // needed data) and then use 64kb for each 'slot'
   return (uint32_t) (0x10000 + slot * getSlotSize());
@@ -179,7 +179,7 @@ uint8_t *getSlotAddress(uint32_t slot) {
   return (uint8_t *) (getSlotAddressOffset(slot) + SNDRAM);
 }
 
-uint32_t getSlotSize() { return (128 * 1024); }
+inline uint32_t getSlotSize() { return (128 * 1024); }
 
 uint32_t pcmStreamBufferSize(uint8_t bits __unused, uint16_t frequency __unused) {
   return getSlotSize();
@@ -267,6 +267,12 @@ void pcmStreamConfigure(uint8_t channels, uint8_t bits, uint16_t frequency) {
   pcmStream.numChannels = channels;
 
   uint32_t bufferSize = pcmStreamBufferSize(bits, frequency);
+
+  if (channels == 2) {
+    m68k_com->pcmCtrl[0].pan = PCM_PAN_LEFT;
+    m68k_com->pcmCtrl[1].pan = PCM_PAN_RIGHT;
+  }
+
   for (uint32_t i = 0; i < channels; i++) {
     if (bits == 8) {
       pcmsys_load_8bit_pcm_slot(bufferSize, frequency, i,
