@@ -182,6 +182,7 @@ void stream_new(binary_stream_t *stream, cdfs_filelist_entry_t *entry,
   stream->sampleCache.samples = sampleCache;
   stream->sampleCache.numSamples = sampleCacheSize;
   stream->sampleCache.currentSample = 0;
+  stream->sampleCache.currentBuffSample = 0;
   stream->eof = false;
   stream->sampleCache.ringBuffEnd = (uint8_t *) sampleCache + sampleCacheSize;
   
@@ -370,521 +371,540 @@ inline bool film_sample_is_audio(const film_sample_t *sample) {
   return sample->interval == 0xFFFFFFFF;
 }
 
-inline void stripdata_skipBlock(stripdata_t *data) {
-  data->writeX += 4;
-  if (data->writeX >= data->bottomX) {
-    data->writeX = data->topX;
-    data->writeY += 4;
-  }
-}
-
-static inline void renderPixel1_15(decode_work_t *work, uint8_t c0) {
-  const codebookRGB_t *e0 = &stripdata_getV1CodebookRGB(&work->stripData)[c0];
-  const uint32_t x = work->stripData.writeX;
-  const uint32_t y = work->stripData.writeY;
-
-  // VDP2 image has 512x256
-  uint32_t imageIndex = ((work->videoStartY + y) * work->decodeParams->vramBufferWidth) + x;
-  uint32_t stride = work->decodeParams->vramBufferWidth;
-
-  
-    uint32_t lines = work->stripData.bottomY - y;
-    if (lines == 0) return;
-    if (lines > 4) lines = 4;
-  // +----+----+  +---+  +---+
-  // | y0 | y1 |  | u |  | v |
-  // +----+----+  +---+  +---+
-  // | y2 | y3 |
-  // +----+----+
-
-  uint16_t *vdp2Image15Ptr = work->decodeParams->vramBuffAddr;
-
-  switch (lines) {
-  default:
-  case 4:
-    vdp2Image15Ptr[imageIndex + 3 * stride + 0] = e0->color[2];
-    vdp2Image15Ptr[imageIndex + 3 * stride + 1] = e0->color[2];
-    vdp2Image15Ptr[imageIndex + 3 * stride + 2] = e0->color[3];
-    vdp2Image15Ptr[imageIndex + 3 * stride + 3] = e0->color[3];
-    // fallthrough
-  case 3:
-    vdp2Image15Ptr[imageIndex + 2 * stride + 0] = e0->color[2];
-    vdp2Image15Ptr[imageIndex + 2 * stride + 1] = e0->color[2];
-    vdp2Image15Ptr[imageIndex + 2 * stride + 2] = e0->color[3];
-    vdp2Image15Ptr[imageIndex + 2 * stride + 3] = e0->color[3];
-    // fallthrough
-  case 2:
-    vdp2Image15Ptr[imageIndex + stride + 0] = e0->color[0];
-    vdp2Image15Ptr[imageIndex + stride + 1] = e0->color[0];
-    vdp2Image15Ptr[imageIndex + stride + 2] = e0->color[1];
-    vdp2Image15Ptr[imageIndex + stride + 3] = e0->color[1];
-    // fallthrough
-  case 1:
-    vdp2Image15Ptr[imageIndex + 0] = e0->color[0];
-    vdp2Image15Ptr[imageIndex + 1] = e0->color[0];
-    vdp2Image15Ptr[imageIndex + 2] = e0->color[1];
-    vdp2Image15Ptr[imageIndex + 3] = e0->color[1];
-  }
-
-}
-
-static inline void renderPixel1_24(decode_work_t *work, uint8_t c0) {
-  const codebookRGB_t *e0 = &stripdata_getV1CodebookRGB(&work->stripData)[c0];
-  const uint32_t x = work->stripData.writeX;
-  const uint32_t y = work->stripData.writeY;
-
-  // VDP2 image has 512x256
-  uint32_t imageIndex = ((work->videoStartY + y) * work->decodeParams->vramBufferWidth) + x;
-  uint32_t stride = work->decodeParams->vramBufferWidth;
-
-  
-    int32_t lines = work->stripData.bottomY - y;
-  if (lines <= 0)
-    return;
-  if (lines > 4)
-    lines = 4;
-
-  // +----+----+  +---+  +---+
-  // | y0 | y1 |  | u |  | v |
-  // +----+----+  +---+  +---+
-  // | y2 | y3 |
-  // +----+----+
-
-  uint32_t *vdp2ImagePtr = work->decodeParams->vramBuffAddr;
-
-  switch (lines) {
-  default:
-  case 4:
-    vdp2ImagePtr[imageIndex + 3 * stride + 0] = e0->color[2];
-    vdp2ImagePtr[imageIndex + 3 * stride + 1] = e0->color[2];
-    vdp2ImagePtr[imageIndex + 3 * stride + 2] = e0->color[3];
-    vdp2ImagePtr[imageIndex + 3 * stride + 3] = e0->color[3];
-    // fallthrough
-  case 3:
-    vdp2ImagePtr[imageIndex + 2 * stride + 0] = e0->color[2];
-    vdp2ImagePtr[imageIndex + 2 * stride + 1] = e0->color[2];
-    vdp2ImagePtr[imageIndex + 2 * stride + 2] = e0->color[3];
-    vdp2ImagePtr[imageIndex + 2 * stride + 3] = e0->color[3];
-    // fallthrough
-  case 2:
-    vdp2ImagePtr[imageIndex + stride + 0] = e0->color[0];
-    vdp2ImagePtr[imageIndex + stride + 1] = e0->color[0];
-    vdp2ImagePtr[imageIndex + stride + 2] = e0->color[1];
-    vdp2ImagePtr[imageIndex + stride + 3] = e0->color[1];
-    // fallthrough
-  case 1:
-    vdp2ImagePtr[imageIndex + 0] = e0->color[0];
-    vdp2ImagePtr[imageIndex + 1] = e0->color[0];
-    vdp2ImagePtr[imageIndex + 2] = e0->color[1];
-    vdp2ImagePtr[imageIndex + 3] = e0->color[1];
-  }
-
-}
-
-static inline void renderPixel4_24(decode_work_t *work, uint8_t c0, uint8_t c1, uint8_t c2,
-  uint8_t c3) {
-
-      // +------+------+------+------+
-      // | e0y0 | e0y1 | e1y0 | e1y1 |
-      // +------+------+------+------+
-      // | e0y2 | e0y3 | e1y2 | e1y3 |
-      // +------+------+------+------+
-      // | e2y0 | e2y1 | e3y0 | e3y1 |
-      // +------+------+------+------+
-      // | e2y2 | e2y3 | e3y2 | e3y3 |
-      // +------+------+------+------+
-
-    uint32_t x = work->stripData.writeX;
-    uint32_t y = work->stripData.writeY;
-
-    int32_t lines = work->stripData.bottomY - y;
-    if (lines <= 0) return;
-    if (lines > 4) lines = 4;
-
-    codebookRGB_t *e[4] = {
-      &stripdata_getV4CodebookRGB(&work->stripData)[c0],
-      &stripdata_getV4CodebookRGB(&work->stripData)[c1],
-      &stripdata_getV4CodebookRGB(&work->stripData)[c2],
-      &stripdata_getV4CodebookRGB(&work->stripData)[c3]
-    };
-
-    uint32_t stride = work->decodeParams->vramBufferWidth;
-    uint32_t imageIndex =
-      ((work->videoStartY + y) * stride) + work->stripData.writeX;
-    uint32_t *vdp2ImagePtr = work->decodeParams->vramBuffAddr;
-
-    switch (lines) {
-    default:
-    case 4:
-      imageIndex += 3 * stride;
-      vdp2ImagePtr[imageIndex + 0] = e[2]->color[2];
-      vdp2ImagePtr[imageIndex + 1] = e[2]->color[3];
-      vdp2ImagePtr[imageIndex + 2] = e[3]->color[2];
-      vdp2ImagePtr[imageIndex + 3] = e[3]->color[3];
-      // fallthrough
-    case 3:
-      imageIndex -= stride;
-      vdp2ImagePtr[imageIndex + 0] = e[2]->color[0];
-      vdp2ImagePtr[imageIndex + 1] = e[2]->color[1];
-      vdp2ImagePtr[imageIndex + 2] = e[3]->color[0];
-      vdp2ImagePtr[imageIndex + 3] = e[3]->color[1];
-      // fallthrough
-    case 2:
-      imageIndex -= stride;
-      vdp2ImagePtr[imageIndex + 0] = e[0]->color[2];
-      vdp2ImagePtr[imageIndex + 1] = e[0]->color[3];
-      vdp2ImagePtr[imageIndex + 2] = e[1]->color[2];
-      vdp2ImagePtr[imageIndex + 3] = e[1]->color[3];
-      // fallthrough
-    case 1:
-      imageIndex -= stride;
-      vdp2ImagePtr[imageIndex + 0] = e[0]->color[0];
-      vdp2ImagePtr[imageIndex + 1] = e[0]->color[1];
-      vdp2ImagePtr[imageIndex + 2] = e[1]->color[0];
-      vdp2ImagePtr[imageIndex + 3] = e[1]->color[1];
-    }
-
-}
-
-static inline void renderPixel4_15(decode_work_t *work, uint8_t c0, uint8_t c1, uint8_t c2, uint8_t c3) {
-
-      // +------+------+------+------+
-      // | e0y0 | e0y1 | e1y0 | e1y1 |
-      // +------+------+------+------+
-      // | e0y2 | e0y3 | e1y2 | e1y3 |
-      // +------+------+------+------+
-      // | e2y0 | e2y1 | e3y0 | e3y1 |
-      // +------+------+------+------+
-      // | e2y2 | e2y3 | e3y2 | e3y3 |
-      // +------+------+------+------+
-
-      uint32_t x = work->stripData.writeX;
-      uint32_t y = work->stripData.writeY;
-
-      int32_t lines = work->stripData.bottomY - y;
-      if (lines <= 0)
-        return;
-      if (lines > 4)
-        lines = 4;
-
-      codebookRGB_t *e[4] = {&stripdata_getV4CodebookRGB(&work->stripData)[c0],
-        &stripdata_getV4CodebookRGB(&work->stripData)[c1],
-        &stripdata_getV4CodebookRGB(&work->stripData)[c2],
-        &stripdata_getV4CodebookRGB(&work->stripData)[c3]};
-
-      uint32_t stride = work->decodeParams->vramBufferWidth;
-      uint32_t imageIndex =
-        ((work->videoStartY + y) * stride) + work->stripData.writeX;
-      uint16_t *vdp2ImagePtr = work->decodeParams->vramBuffAddr;
-
-      switch (lines) {
-      default:
-      case 4:
-        imageIndex += 3 * stride;
-        vdp2ImagePtr[imageIndex + 0] = e[2]->color[2];
-        vdp2ImagePtr[imageIndex + 1] = e[2]->color[3];
-        vdp2ImagePtr[imageIndex + 2] = e[3]->color[2];
-        vdp2ImagePtr[imageIndex + 3] = e[3]->color[3];
-        // fallthrough
-      case 3:
-        imageIndex -= stride;
-        vdp2ImagePtr[imageIndex + 0] = e[2]->color[0];
-        vdp2ImagePtr[imageIndex + 1] = e[2]->color[1];
-        vdp2ImagePtr[imageIndex + 2] = e[3]->color[0];
-        vdp2ImagePtr[imageIndex + 3] = e[3]->color[1];
-        // fallthrough
-      case 2:
-        imageIndex -= stride;
-        vdp2ImagePtr[imageIndex + 0] = e[0]->color[2];
-        vdp2ImagePtr[imageIndex + 1] = e[0]->color[3];
-        vdp2ImagePtr[imageIndex + 2] = e[1]->color[2];
-        vdp2ImagePtr[imageIndex + 3] = e[1]->color[3];
-        // fallthrough
-      case 1:
-        imageIndex -= stride;
-        vdp2ImagePtr[imageIndex + 0] = e[0]->color[0];
-        vdp2ImagePtr[imageIndex + 1] = e[0]->color[1];
-        vdp2ImagePtr[imageIndex + 2] = e[1]->color[0];
-        vdp2ImagePtr[imageIndex + 3] = e[1]->color[1];
-      }
-}
-
 static inline void decodeInter15(decode_work_t *work,
   uint16_t chunkDataLength) {
   int32_t remainingSectionBytes = chunkDataLength - 4;
-  uint8_t *readPtr = work->stream.sampleCache.readPos;
+  uint8_t *src = work->stream.sampleCache.readPos;
+  uint16_t *vdp2ImagePtr = work->decodeParams->vramBuffAddr;
+  uint32_t vramwidth = work->decodeParams->vramBufferWidth;
+  uint32_t x = work->stripData.writeX;
+  uint32_t y = work->stripData.writeY;
+  uint32_t imageIndex = ((work->videoStartY + y) * vramwidth) + x;
 
-  // We keep reading flags as long as it is possible. We first read 4
-  // bytes and then we start shifting them for the VLC. Once we reach
-  // the end we try to read a new flag.
-  uint32_t flags;
-  flags =
-    (readPtr[0] << 24) | (readPtr[1] << 16) | (readPtr[2] << 8) | readPtr[3];
+  uint16_t rgb1, rgb2, rgb3, rgb4 = 0;
 
-  readPtr += 4;
-
+  uint32_t flags = 0;
   uint32_t shifts = 0;
-  while (remainingSectionBytes) {
-    // Running on VLC now, so we just keep consuming bytes (4 each time)
-    // until there is nothing else. 0 => skip block, 1 => read next bit:
-    // - next bit is 1 = V4
-    // - next bit is 0 = V1
-    if (flags & 0x80000000) {
-      // We are at the last bit so we need to fetch the next flags and check
-      // the first bit as if it was the next on this sequence.
-      if (shifts == 31) {
-        flags = (readPtr[0] << 24) | (readPtr[1] << 16) | (readPtr[2] << 8) |
-          readPtr[3];
-        readPtr += 4;
-        remainingSectionBytes -= 4;
-        shifts = 0;
-      } else {
+  uint32_t vramDelta = vramwidth * 3;
+
+  uint32_t quarterY = (work->stripData.bottomY - y) >> 2;
+  uint32_t quarterX = work->stripData.bottomX >> 2;
+  uint32_t xPos = quarterX;
+  codebookRGB_t *codebook_rgbval;
+  uint16_t *y0 = vdp2ImagePtr + imageIndex;
+  uint16_t *y1 = y0 + vramwidth;
+  uint16_t *y2 = y1 + vramwidth;
+  uint16_t *y3 = y2 + vramwidth;
+  uint32_t isV4 = 0;
+
+  if ((quarterY != 0) && (quarterX != 0)) {
+    shifts = 1;
+    xPos = quarterX;
+    do {
+      do {
+        shifts--;
+        if (shifts == 0) {
+          flags = (src[0] << 24) | (src[1] << 16) | (src[2] << 8) | src[3];
+          src += 4;
+          shifts = 32;
+        }
+        isV4 = flags & 0x80000000;
         flags <<= 1;
-        shifts++;
-      }
-
-      if (flags & 0x80000000) {
-        // V4
-        renderPixel4_15(work, readPtr[0], readPtr[1], readPtr[2], readPtr[3]);
-        readPtr += 4;
-        remainingSectionBytes -= 4;
-      } else {
-        // V1
-        renderPixel1_15(work, readPtr[0]);
-        readPtr += 1;
-        remainingSectionBytes -= 1;
-      }
-    }
-
-    stripdata_skipBlock(&work->stripData);
-
-    // If we read all the bits, we just fetch the next flags.
-    if (shifts == 31) {
-      if (remainingSectionBytes < 4)
-        break;
-
-      flags = (readPtr[0] << 24) | (readPtr[1] << 16) | (readPtr[2] << 8) |
-        readPtr[3];
-      readPtr += 4;
-      remainingSectionBytes -= 4;
-      shifts = 0;
-    } else {
-      flags <<= 1;
-      shifts++;
-    }
-  }
-
-  if (remainingSectionBytes) {
-    readPtr += remainingSectionBytes;
-  }
-  work->stream.sampleCache.readPos = readPtr;
-}
-
-static inline void decodeInter24(decode_work_t *work, uint16_t chunkDataLength) {
-
-  int32_t remainingSectionBytes = chunkDataLength - 4;
-  uint8_t *readPtr = work->stream.sampleCache.readPos;
-
-  // We keep reading flags as long as it is possible. We first read 4
-  // bytes and then we start shifting them for the VLC. Once we reach
-  // the end we try to read a new flag.
-  uint32_t flags;
-  flags = (readPtr[0] << 24) | (readPtr[1] << 16) | (readPtr[2] << 8) | readPtr[3];
-
-  readPtr += 4;
-
-  uint32_t shifts = 0;
-  while (remainingSectionBytes) {
-    // Running on VLC now, so we just keep consuming bytes (4 each time)
-    // until there is nothing else. 0 => skip block, 1 => read next bit:
-    // - next bit is 1 = V4
-    // - next bit is 0 = V1
-    if (flags & 0x80000000) {
-      // We are at the last bit so we need to fetch the next flags and check
-      // the first bit as if it was the next on this sequence.
-      if (shifts == 31) {
-        flags = (readPtr[0] << 24) | (readPtr[1] << 16) | (readPtr[2] << 8) | readPtr[3];
-        readPtr += 4;
-        remainingSectionBytes -= 4;
-        shifts = 0;
-      } else {
-        flags <<= 1;
-        shifts++;
-      }
-
-      if (flags & 0x80000000) {
-        // V4
-        renderPixel4_24(work, readPtr[0], readPtr[1], readPtr[2], readPtr[3]);
-        readPtr += 4;
-        remainingSectionBytes -= 4;
-      } else {
-        // V1
-        renderPixel1_24(work, readPtr[0]);
-        readPtr += 1;
-        remainingSectionBytes -= 1;
-      }
-    }
-
-    stripdata_skipBlock(&work->stripData);
-
-    // If we read all the bits, we just fetch the next flags.
-    if (shifts == 31) {
-      if (remainingSectionBytes < 4)
-        break;
-
-      flags = (readPtr[0] << 24) | (readPtr[1] << 16) | (readPtr[2] << 8) | readPtr[3];
-      readPtr += 4;
-      remainingSectionBytes -= 4;
-      shifts = 0;
-    } else {
-      flags <<= 1;
-      shifts++;
-    }
-  }
-
- if (remainingSectionBytes) {
-    readPtr += remainingSectionBytes;
-  }
-   work->stream.sampleCache.readPos = readPtr;
-}
-
-static inline void decodeIntra15(decode_work_t *work, uint16_t chunkDataLength,
-  bool skipStripData) {
-  int32_t remainingSectionBytes = chunkDataLength;
-
-  if (skipStripData == true) {
-    uint32_t readBytes = 0;
-    uint8_t *readPtr = work->stream.sampleCache.readPos;
-    uint32_t i = 0;
-
-    // Process 4 blocks per iteration
-    for (; i + 3 < remainingSectionBytes; i += 4) {
-      renderPixel1_15(work, readPtr[0]);
-      stripdata_skipBlock(&work->stripData);
-
-      renderPixel1_15(work, readPtr[1]);
-      stripdata_skipBlock(&work->stripData);
-
-      renderPixel1_15(work, readPtr[2]);
-      stripdata_skipBlock(&work->stripData);
-
-      renderPixel1_15(work, readPtr[3]);
-      stripdata_skipBlock(&work->stripData);
-
-      readPtr += 4;
-    }
-
-    // Handle remaining blocks (0–3)
-    for (; i < remainingSectionBytes; i++) {
-      renderPixel1_15(work, readPtr[0]);
-      stripdata_skipBlock(&work->stripData);
-      readPtr += 1;
-    }
-
-    // Update read pointer
-    work->stream.sampleCache.readPos = readPtr;
-  } else {
-    uint32_t flags = 0;
-    uint8_t *readPtr = work->stream.sampleCache.readPos;
-    while (remainingSectionBytes &&
-      work->stripData.writeY <= work->stripData.bottomY) {
-      flags = (readPtr[0] << 24) | (readPtr[1] << 16) | (readPtr[2] << 8) |
-        (readPtr[3]);
-      readPtr += 4;
-      remainingSectionBytes -= 4;
-
-      for (uint32_t i = 0; i < 32; i++) {
-          if (flags & 0x80000000) {
-            renderPixel4_15(work, readPtr[0], readPtr[1], readPtr[2],
-              readPtr[3]);
-            readPtr += 4;
-            remainingSectionBytes -= 4;
-          } else {
-            renderPixel1_15(work, readPtr[0]);
-            readPtr += 1;
-            remainingSectionBytes -= 1;
+        if (isV4 != 0) {
+          shifts--;
+          if (shifts == 0) {
+            flags = (src[0] << 24) | (src[1] << 16) | (src[2] << 8) | src[3];
+            src += 4;
+            shifts = 32;
           }
-          stripdata_skipBlock(&work->stripData);
+          isV4 = flags & 0x80000000;
           flags <<= 1;
-        
-      }
-    }
-    work->stream.sampleCache.readPos = readPtr;
-  }
+          if (isV4 == 0) {
+            codebook_rgbval =
+              &stripdata_getV1CodebookRGB(&work->stripData)[src[0]];
+            rgb1 = codebook_rgbval->color[0] & 0xFFFF;
+            rgb2 = codebook_rgbval->color[0] >> 16 & 0xFFFF;
+            y0[0] = rgb2;
+            y0[1] = rgb2;
+            y1[0] = rgb2;
+            y1[1] = rgb2;
+            y0[2] = rgb1;
+            y0[3] = rgb1;
+            y1[2] = rgb1;
+            y1[3] = rgb1;
+            rgb1 = codebook_rgbval->color[1] & 0xFFFF;
+            rgb2 = codebook_rgbval->color[1] >> 16 & 0xFFFF;
+            y2[0] = rgb2;
+            y2[1] = rgb2;
+            y3[0] = rgb2;
+            y3[1] = rgb2;
+            y2[2] = rgb1;
+            y2[3] = rgb1;
+            y3[2] = rgb1;
+            y3[3] = rgb1;
+            src++;
+          } else {
+            codebook_rgbval =
+              &stripdata_getV4CodebookRGB(&work->stripData)[src[0]];
+            rgb1 = codebook_rgbval->color[0] & 0xFFFF;
+            rgb2 = codebook_rgbval->color[0] >> 16 & 0xFFFF;
+            rgb3 = codebook_rgbval->color[1] & 0xFFFF;
+            rgb4 = codebook_rgbval->color[1] >> 16 & 0xFFFF;
+            y0[0] = rgb2;
+            y0[1] = rgb1;
+            y1[0] = rgb4;
+            y1[1] = rgb3;
 
-  if (remainingSectionBytes) {
-    work->stream.sampleCache.readPos += remainingSectionBytes;
+            codebook_rgbval =
+              &stripdata_getV4CodebookRGB(&work->stripData)[src[1]];
+            rgb1 = codebook_rgbval->color[0] & 0xFFFF;
+            rgb2 = codebook_rgbval->color[0] >> 16 & 0xFFFF;
+            rgb3 = codebook_rgbval->color[1] & 0xFFFF;
+            rgb4 = codebook_rgbval->color[1] >> 16 & 0xFFFF;
+            y0[2] = rgb2;
+            y0[3] = rgb1;
+            y1[2] = rgb4;
+            y1[3] = rgb3;
+
+            codebook_rgbval =
+              &stripdata_getV4CodebookRGB(&work->stripData)[src[2]];
+            rgb1 = codebook_rgbval->color[0] & 0xFFFF;
+            rgb2 = codebook_rgbval->color[0] >> 16 & 0xFFFF;
+            rgb3 = codebook_rgbval->color[1] & 0xFFFF;
+            rgb4 = codebook_rgbval->color[1] >> 16 & 0xFFFF;
+            y2[0] = rgb2;
+            y2[1] = rgb1;
+            y3[0] = rgb4;
+            y3[1] = rgb3;
+
+            codebook_rgbval =
+              &stripdata_getV4CodebookRGB(&work->stripData)[src[3]];
+            rgb1 = codebook_rgbval->color[0] & 0xFFFF;
+            rgb2 = codebook_rgbval->color[0] >> 16 & 0xFFFF;
+            rgb3 = codebook_rgbval->color[1] & 0xFFFF;
+            rgb4 = codebook_rgbval->color[1]  >> 16 & 0xFFFF;
+            y2[2] = rgb2;
+            y2[3] = rgb1;
+            y3[2] = rgb4;
+            y3[3] = rgb3;
+            src += 4;
+          }
+        }
+        y0 += 4;
+        y1 += 4;
+        y2 += 4;
+        y3 += 4;
+        xPos--;
+      } while (xPos != 0);
+      y0 += vramDelta;
+      y1 += vramDelta;
+      y2 += vramDelta;
+      y3 += vramDelta;
+      quarterY--;
+      xPos = quarterX;
+    } while (quarterY != 0);
   }
+  work->stream.sampleCache.readPos += chunkDataLength;
+}
+
+static inline void decodeInter24(decode_work_t *work,
+  uint16_t chunkDataLength) {
+    int32_t remainingSectionBytes = chunkDataLength - 4;
+    uint8_t *src = work->stream.sampleCache.readPos;
+    uint32_t *vdp2ImagePtr = work->decodeParams->vramBuffAddr;
+    uint32_t vramwidth = work->decodeParams->vramBufferWidth;
+    uint32_t x = work->stripData.writeX;
+    uint32_t y = work->stripData.writeY;
+    uint32_t imageIndex = ((work->videoStartY + y) * vramwidth) + x;
+
+    uint32_t rgb1, rgb2, rgb3, rgb4 = 0;
+   
+    uint32_t flags = 0;
+    uint32_t shifts = 0;
+    uint32_t vramDelta = vramwidth * 3;
+
+    uint32_t quarterY = (work->stripData.bottomY - y) >> 2;
+    uint32_t quarterX = work->stripData.bottomX >> 2;
+    uint32_t xPos = quarterX;
+    codebookRGB_t *codebook_rgbval;
+    uint32_t *y0 = vdp2ImagePtr + imageIndex;
+    uint32_t *y1 = y0 + vramwidth;
+    uint32_t *y2 = y1 + vramwidth;
+    uint32_t *y3 = y2 + vramwidth;
+    uint32_t isV4 = 0;
+
+    if ((quarterY != 0) && (quarterX != 0)) {
+      shifts = 1;
+      xPos = quarterX;
+      do {
+          do {
+          shifts--;
+          if (shifts == 0) {
+            flags = (src[0] << 24) | (src[1] << 16) | (src[2] << 8) | src[3];
+                src += 4;
+                shifts = 32;
+          }
+          isV4 = flags & 0x80000000;
+          flags <<= 1;
+          if (isV4 != 0) {
+            shifts--;
+            if (shifts == 0) {
+              flags = (src[0] << 24) | (src[1] << 16) | (src[2] << 8) | src[3];
+              src += 4;
+              shifts = 32;
+            }
+            isV4 = flags & 0x80000000;
+            flags <<= 1;
+            if (isV4 == 0) {
+              codebook_rgbval = &stripdata_getV1CodebookRGB(&work->stripData)[src[0]];
+                rgb1 = codebook_rgbval->color[0];
+                rgb2 = codebook_rgbval->color[1];
+                y0[0] = rgb1;
+                y0[1] = rgb1;
+                y1[0] = rgb1;
+                y1[1] = rgb1;
+                y0[2] = rgb2;
+                y0[3] = rgb2;
+                y1[2] = rgb2;
+                y1[3] = rgb2;
+                rgb1 = codebook_rgbval->color[2];
+                rgb2 = codebook_rgbval->color[3];
+                y2[0] = rgb1;
+                y2[1] = rgb1;
+                y3[0] = rgb1;
+                y3[1] = rgb1;
+                y2[2] = rgb2;
+                y2[3] = rgb2;
+                y3[2] = rgb2;
+                y3[3] = rgb2;
+                src++;
+            } else {
+              codebook_rgbval = &stripdata_getV4CodebookRGB(&work->stripData)[src[0]];
+              rgb1 = codebook_rgbval->color[0];
+              rgb2 = codebook_rgbval->color[1];
+              rgb3 = codebook_rgbval->color[2];
+              rgb4 = codebook_rgbval->color[3];
+              y0[0] = rgb1;
+              y0[1] = rgb2;
+              y1[0] = rgb3;
+              y1[1] = rgb4;
+              
+             codebook_rgbval = &stripdata_getV4CodebookRGB(&work->stripData)[src[1]];
+              rgb1 = codebook_rgbval->color[0];
+              rgb2 = codebook_rgbval->color[1];
+              rgb3 = codebook_rgbval->color[2];
+              rgb4 = codebook_rgbval->color[3];
+             y0[2] = rgb1;
+             y0[3] = rgb2;
+             y1[2] = rgb3;
+             y1[3] = rgb4;
+            
+             codebook_rgbval = &stripdata_getV4CodebookRGB(&work->stripData)[src[2]];
+              rgb1 = codebook_rgbval->color[0];
+              rgb2 = codebook_rgbval->color[1];
+              rgb3 = codebook_rgbval->color[2];
+              rgb4 = codebook_rgbval->color[3];
+             y2[0] = rgb1;
+             y2[1] = rgb2;
+             y3[0] = rgb3;
+             y3[1] = rgb4;
+
+             
+             codebook_rgbval = &stripdata_getV4CodebookRGB(&work->stripData)[src[3]];
+              rgb1 = codebook_rgbval->color[0];
+              rgb2 = codebook_rgbval->color[1];
+              rgb3 = codebook_rgbval->color[2];
+              rgb4 = codebook_rgbval->color[3];
+             y2[2] = rgb1;
+             y2[3] = rgb2;
+             y3[2] = rgb3;
+             y3[3] = rgb4;
+             src += 4;
+            }
+
+          }
+          y0 += 4;
+          y1 += 4;
+          y2 += 4;
+          y3 += 4;
+          xPos--;
+          } while (xPos != 0);
+          y0 += vramDelta;
+          y1 += vramDelta;
+          y2 += vramDelta;
+          y3 += vramDelta;
+          quarterY--;
+          xPos = quarterX;
+      } while (quarterY != 0);
+    }
+    work->stream.sampleCache.readPos += chunkDataLength;
 }
 
 static inline void decodeIntra24(decode_work_t *work, uint16_t chunkDataLength,
   bool skipStripData) {
-  int32_t remainingSectionBytes = chunkDataLength;
 
-  if (skipStripData == true) {
-    uint32_t readBytes = 0;
-    uint8_t *readPtr = work->stream.sampleCache.readPos;
-    uint32_t i = 0;
+    int32_t remainingSectionBytes = chunkDataLength - 4;
+  uint8_t *src = work->stream.sampleCache.readPos;
+  uint32_t *vdp2ImagePtr = work->decodeParams->vramBuffAddr;
+  uint32_t vramwidth = work->decodeParams->vramBufferWidth;
+  uint32_t x = work->stripData.writeX;
+  uint32_t y = work->stripData.writeY;
+  uint32_t imageIndex = ((work->videoStartY + y) * vramwidth) + x;
 
-    // Process 4 blocks per iteration
-    for (; i + 3 < remainingSectionBytes; i += 4) {
-      renderPixel1_24(work, readPtr[0]);
-      stripdata_skipBlock(&work->stripData);
+  uint32_t rgb1, rgb2, rgb3, rgb4 = 0;
 
-      renderPixel1_24(work, readPtr[1]);
-      stripdata_skipBlock(&work->stripData);
+  uint32_t flags = 0;
+  uint32_t shifts = 0;
+  uint32_t vramDelta = vramwidth * 3;
 
-      renderPixel1_24(work, readPtr[2]);
-      stripdata_skipBlock(&work->stripData);
+  uint32_t quarterY = (work->stripData.bottomY - y) >> 2;
+  uint32_t quarterX = work->stripData.bottomX >> 2;
+  uint32_t xPos = quarterX;
+  codebookRGB_t *codebook_rgbval;
+  uint32_t *y0 = vdp2ImagePtr + imageIndex;
+  uint32_t *y1 = y0 + vramwidth;
+  uint32_t *y2 = y1 + vramwidth;
+  uint32_t *y3 = y2 + vramwidth;
+  uint32_t isV4 = 0;
 
-      renderPixel1_24(work, readPtr[3]);
-      stripdata_skipBlock(&work->stripData);
-
-      readPtr += 4;
+  if ((quarterY != 0) && (quarterX != 0)) {
+    shifts = 1;
+    xPos = quarterX;
+    if (skipStripData == true) {
+      shifts = -1;
+      flags = 0;
     }
-
-    // Handle remaining blocks (0–3)
-    for (; i < remainingSectionBytes; i++) {
-      renderPixel1_24(work, readPtr[0]);
-      stripdata_skipBlock(&work->stripData);
-      readPtr += 1;
-    }
-
-    // Update read pointer
-    work->stream.sampleCache.readPos = readPtr;
-  } else {
-    uint32_t flags = 0;
-    uint8_t *readPtr = work->stream.sampleCache.readPos;
-    while (remainingSectionBytes &&
-      work->stripData.writeY <= work->stripData.bottomY) {
-      flags = (readPtr[0] << 24) | (readPtr[1] << 16) | (readPtr[2] << 8) | (readPtr[3]);
-      readPtr += 4;
-      remainingSectionBytes -= 4;
-
-      for (uint32_t i = 0; i < 32; i++) {
-        if (flags & 0x80000000) {
-            renderPixel4_24(work, readPtr[0],
-                readPtr[1],
-                readPtr[2],
-                readPtr[3]);
-            readPtr += 4;
-            remainingSectionBytes -= 4;
-        } else {
-            renderPixel1_24(work, readPtr[0]);
-            readPtr += 1;
-            remainingSectionBytes -= 1;
+    do {
+      do {
+        shifts--;
+        if (shifts == 0) {
+          flags = (src[0] << 24) | (src[1] << 16) | (src[2] << 8) | src[3];
+          src += 4;
+          shifts = 32;
         }
-        stripdata_skipBlock(&work->stripData);
+        isV4 = flags & 0x80000000;
         flags <<= 1;
+        if (isV4 == 0) {
+            codebook_rgbval =
+              &stripdata_getV1CodebookRGB(&work->stripData)[src[0]];
+            rgb1 = codebook_rgbval->color[0];
+            rgb2 = codebook_rgbval->color[1];
+            y0[0] = rgb1;
+            y0[1] = rgb1;
+            y1[0] = rgb1;
+            y1[1] = rgb1;
+            y0[2] = rgb2;
+            y0[3] = rgb2;
+            y1[2] = rgb2;
+            y1[3] = rgb2;
+            rgb1 = codebook_rgbval->color[2];
+            rgb2 = codebook_rgbval->color[3];
+            y2[0] = rgb1;
+            y2[1] = rgb1;
+            y3[0] = rgb1;
+            y3[1] = rgb1;
+            y2[2] = rgb2;
+            y2[3] = rgb2;
+            y3[2] = rgb2;
+            y3[3] = rgb2;
+            src++;
+        } else {
+            codebook_rgbval =
+              &stripdata_getV4CodebookRGB(&work->stripData)[src[0]];
+            rgb1 = codebook_rgbval->color[0];
+            rgb2 = codebook_rgbval->color[1];
+            rgb3 = codebook_rgbval->color[2];
+            rgb4 = codebook_rgbval->color[3];
+            y0[0] = rgb1;
+            y0[1] = rgb2;
+            y1[0] = rgb3;
+            y1[1] = rgb4;
+
+            codebook_rgbval =
+              &stripdata_getV4CodebookRGB(&work->stripData)[src[1]];
+            rgb1 = codebook_rgbval->color[0];
+            rgb2 = codebook_rgbval->color[1];
+            rgb3 = codebook_rgbval->color[2];
+            rgb4 = codebook_rgbval->color[3];
+            y0[2] = rgb1;
+            y0[3] = rgb2;
+            y1[2] = rgb3;
+            y1[3] = rgb4;
+
+            codebook_rgbval =
+              &stripdata_getV4CodebookRGB(&work->stripData)[src[2]];
+            rgb1 = codebook_rgbval->color[0];
+            rgb2 = codebook_rgbval->color[1];
+            rgb3 = codebook_rgbval->color[2];
+            rgb4 = codebook_rgbval->color[3];
+            y2[0] = rgb1;
+            y2[1] = rgb2;
+            y3[0] = rgb3;
+            y3[1] = rgb4;
+
+            codebook_rgbval =
+              &stripdata_getV4CodebookRGB(&work->stripData)[src[3]];
+            rgb1 = codebook_rgbval->color[0];
+            rgb2 = codebook_rgbval->color[1];
+            rgb3 = codebook_rgbval->color[2];
+            rgb4 = codebook_rgbval->color[3];
+            y2[2] = rgb1;
+            y2[3] = rgb2;
+            y3[2] = rgb3;
+            y3[3] = rgb4;
+            src += 4;
+        }
         
-      }
-    }
-    work->stream.sampleCache.readPos = readPtr;
-
+        y0 += 4;
+        y1 += 4;
+        y2 += 4;
+        y3 += 4;
+        xPos--;
+      } while (xPos != 0);
+      y0 += vramDelta;
+      y1 += vramDelta;
+      y2 += vramDelta;
+      y3 += vramDelta;
+      quarterY--;
+      xPos = quarterX;
+    } while (quarterY != 0);
   }
-
-    work->stream.sampleCache.readPos += remainingSectionBytes;
+  work->stream.sampleCache.readPos += chunkDataLength;
 }
+
+static inline void decodeIntra15(decode_work_t *work, uint16_t chunkDataLength,
+  bool skipStripData) {
+  int32_t remainingSectionBytes = chunkDataLength - 4;
+  uint8_t *src = work->stream.sampleCache.readPos;
+  uint16_t *vdp2ImagePtr = work->decodeParams->vramBuffAddr;
+  uint32_t vramwidth = work->decodeParams->vramBufferWidth;
+  uint32_t x = work->stripData.writeX;
+  uint32_t y = work->stripData.writeY;
+  uint32_t imageIndex = ((work->videoStartY + y) * vramwidth) + x;
+
+  uint16_t rgb1, rgb2, rgb3, rgb4 = 0;
+
+  uint32_t flags = 0;
+  uint32_t shifts = 0;
+  uint32_t vramDelta = vramwidth * 3;
+
+  uint32_t quarterY = (work->stripData.bottomY - y) >> 2;
+  uint32_t quarterX = work->stripData.bottomX >> 2;
+  uint32_t xPos = quarterX;
+  codebookRGB_t *codebook_rgbval;
+  uint16_t *y0 = vdp2ImagePtr + imageIndex;
+  uint16_t *y1 = y0 + vramwidth;
+  uint16_t *y2 = y1 + vramwidth;
+  uint16_t *y3 = y2 + vramwidth;
+  uint32_t isV4 = 0;
+
+  if ((quarterY != 0) && (quarterX != 0)) {
+    shifts = 1;
+    xPos = quarterX;
+    if (skipStripData == true) {
+      shifts = -1;
+      flags = 0;
+    }
+    do {
+      do {
+        shifts--;
+        if (shifts == 0) {
+          flags = (src[0] << 24) | (src[1] << 16) | (src[2] << 8) | src[3];
+          src += 4;
+          shifts = 32;
+        }
+        isV4 = flags & 0x80000000;
+        flags <<= 1;
+        if (isV4 == 0) {
+          codebook_rgbval =
+            &stripdata_getV1CodebookRGB(&work->stripData)[src[0]];
+          codebook_rgbval->color[0];
+          rgb1 = codebook_rgbval->color[0] & 0xFFFF;
+          rgb2 = codebook_rgbval->color[0] >> 16 & 0xFFFF;
+          y0[0] = rgb2;
+          y0[1] = rgb2;
+          y1[0] = rgb2;
+          y1[1] = rgb2;
+          y0[2] = rgb1;
+          y0[3] = rgb1;
+          y1[2] = rgb1;
+          y1[3] = rgb1;
+          rgb1 = codebook_rgbval->color[1] & 0xFFFF;
+          rgb2 = codebook_rgbval->color[1] >> 16 & 0xFFFF;
+          y2[0] = rgb2;
+          y2[1] = rgb2;
+          y3[0] = rgb2;
+          y3[1] = rgb2;
+          y2[2] = rgb1;
+          y2[3] = rgb1;
+          y3[2] = rgb1;
+          y3[3] = rgb1;
+          src++;
+        } else {
+          codebook_rgbval =
+            &stripdata_getV4CodebookRGB(&work->stripData)[src[0]];
+
+          rgb1 = codebook_rgbval->color[0] & 0xFFFF;
+          rgb2 = codebook_rgbval->color[0] >> 16 & 0xFFFF;
+          rgb3 = codebook_rgbval->color[1] & 0xFFFF;
+          rgb4 = codebook_rgbval->color[1] >> 16 & 0xFFFF;
+          y0[0] = rgb2;
+          y0[1] = rgb1;
+          y1[0] = rgb4;
+          y1[1] = rgb3;
+
+          codebook_rgbval =
+            &stripdata_getV4CodebookRGB(&work->stripData)[src[1]];
+          rgb1 = codebook_rgbval->color[0] & 0xFFFF;
+          rgb2 = codebook_rgbval->color[0] >> 16 & 0xFFFF;
+          rgb3 = codebook_rgbval->color[1] & 0xFFFF;
+          rgb4 = codebook_rgbval->color[1] >> 16 & 0xFFFF;
+          y0[2] = rgb2;
+          y0[3] = rgb1;
+          y1[2] = rgb4;
+          y1[3] = rgb3;
+
+          codebook_rgbval =
+            &stripdata_getV4CodebookRGB(&work->stripData)[src[2]];
+          rgb1 = codebook_rgbval->color[0] & 0xFFFF;
+          rgb2 = codebook_rgbval->color[0] >> 16 & 0xFFFF;
+          rgb3 = codebook_rgbval->color[1] & 0xFFFF;
+          rgb4 = codebook_rgbval->color[1] >> 16 & 0xFFFF;
+          y2[0] = rgb2;
+          y2[1] = rgb1;
+          y3[0] = rgb4;
+          y3[1] = rgb3;
+
+          codebook_rgbval =
+            &stripdata_getV4CodebookRGB(&work->stripData)[src[3]];
+          rgb1 = codebook_rgbval->color[0] & 0xFFFF;
+          rgb2 = codebook_rgbval->color[0] >> 16 & 0xFFFF;
+          rgb3 = codebook_rgbval->color[1] & 0xFFFF;
+          rgb4 = codebook_rgbval->color[1] >> 16 & 0xFFFF;
+          y2[2] = rgb2;
+          y2[3] = rgb1;
+          y3[2] = rgb4;
+          y3[3] = rgb3;
+          src += 4;
+        }
+
+        y0 += 4;
+        y1 += 4;
+        y2 += 4;
+        y3 += 4;
+        xPos--;
+      } while (xPos != 0);
+      y0 += vramDelta;
+      y1 += vramDelta;
+      y2 += vramDelta;
+      y3 += vramDelta;
+      quarterY--;
+      xPos = quarterX;
+    } while (quarterY != 0);
+  }
+  work->stream.sampleCache.readPos += chunkDataLength;
+}
+
 
 void readChunk(
   uint16_t chunkID, uint16_t chunkDataLength, decode_work_t *work) {
@@ -1059,7 +1079,7 @@ void parseVideo(decode_work_t *work) {
 
       if (cvidChunkDataLength)
       readChunk(cvidChunkID, cvidChunkDataLength, work);
-    } // Strip data
+    } 
   }
 }
 
@@ -1067,7 +1087,7 @@ void parseAudio(decode_work_t *work, int32_t length) {
  
   if (work->filmHeader.fdsc.sound_channels == 2) {
       if (work->filmHeader.fdsc.sound_resolution == 8) {
-      //pcm_cfg.stride = CPU_DMAC_STRIDE_1_BYTE;
+      pcm_cfg.stride = CPU_DMAC_STRIDE_1_BYTE;
     }
       /*
         int32_t missingBytes = length;
@@ -1089,10 +1109,10 @@ void parseAudio(decode_work_t *work, int32_t length) {
         if (work->audioPlaying == false) {
           film_audio_play(0);
           work->audioPlaying = true;
-        }*/
-
+        } 
+        */
       int32_t missingBytes = length >> 1;
-
+        
       while (missingBytes > 0) {
         int32_t readSize = film_audio_get_next_buffer_size();
         if (readSize > missingBytes) {
@@ -1104,11 +1124,10 @@ void parseAudio(decode_work_t *work, int32_t length) {
         film_audio_notify_read_buffer_bytes(readSize);
         missingBytes -= readSize;
       }
-      //work->stream.sampleCache.readPos += length >> 1;
+      work->stream.sampleCache.readPos += length >> 1;
 
       if (work->audioPlaying == false) {
-       // film_audio_play(0);
-        work->audioPlaying = true;
+        work->audioWaitingToStart = true;
       }
     }
     else {
@@ -1127,8 +1146,7 @@ void parseAudio(decode_work_t *work, int32_t length) {
       }
 
       if (work->audioPlaying == false) {
-        film_audio_play(0);
-        work->audioPlaying = true;
+        work->audioWaitingToStart = true;
       }
     }
         
@@ -1141,7 +1159,13 @@ void init_film(cdfs_filelist_entry_t *fsEntry, decode_work_t *work,
 
   stream_new(&work->stream, fsEntry, work->decodeParams->sampleBuffAddr,
     work->decodeParams->sampleBuffSize);
-  stream_readbytes(&work->stream, &work->filmHeader, sizeof(film_header));
+
+  char *filmPtr = &work->filmHeader;
+  //Will fail to play a 2nd file without this.
+  while (filmPtr[0] != 'F') {
+    stream_readbytes(&work->stream, &work->filmHeader, sizeof(film_header));
+    scu_dma_level_wait(0);
+  }
 
   film_audio_setup(work, work->filmHeader.fdsc.sample_rate >> 16,
     work->filmHeader.fdsc.sound_channels,
@@ -1209,6 +1233,8 @@ void cpk_play(decode_work_t *work) {
   work->tickCount = 0;
   work->copyingVideoFrame = 0;
   work->audioWaitingToStart = false;
+  work->isDisplayReady = false;
+  work->displayWaiting = false;
   work->lastFrameTime = frtTimerEllapsed();
   work->play_status = PLAY;
 }
@@ -1236,19 +1262,22 @@ void handle_play(decode_work_t *work) {
   if (!work->displayWaiting) {
     if (work->stream.sampleCache.currentSample <
       work->stream.sampleCache.numSamples) {
+      readBytesIntoRingBuff(&work->stream);
       work->nextSample = work->stream.sampleCache.samples[work->stream.sampleCache.currentSample++];
       work->stream.sampleCache.readPos = work->nextSample.offset;
       bool isVideo = film_sample_is_video(&work->nextSample);
-      work->timeEllapsed = frtTimerEllapsed();
-      uint32_t deltaTime = work->timeEllapsed - work->lastFrameTime;
+      uint32_t ellapsed = frtTimerEllapsed();
+      work->timeEllapsed = ellapsed;
+      uint32_t deltaTime = ellapsed - work->lastFrameTime;
       if (deltaTime > 0) {
         work->tickCount += deltaTime;
+        work->lastFrameTime = ellapsed;
       }
 
       if (work->timeEllapsed >= 1000) {
-        frtTimerStart(work->timeEllapsed - 1000);
+        frtTimerStart(ellapsed - 1000);
+        work->lastFrameTime = frtTimerEllapsed();
       }
-      work->lastFrameTime = frtTimerEllapsed();
 
       if (isVideo) {
         parseVideo(work);
@@ -1256,27 +1285,41 @@ void handle_play(decode_work_t *work) {
         work->displayWaiting = true;
       } else {
         parseAudio(work, work->nextSample.length);
-        readBytesIntoRingBuff(&work->stream);
       }
 
-    } else {
-      work->play_status = END;
     }
   } 
+  
 
   if(work->displayWaiting) {
-    readBytesIntoRingBuff(&work->stream);
     if (work->tickCount < work->ticksUntilNextFrame) {
-      work->timeEllapsed = frtTimerEllapsed();
-      int32_t deltaTime = work->timeEllapsed - work->lastFrameTime;
+      uint32_t ellapsed = frtTimerEllapsed();
+      work->timeEllapsed = ellapsed;
+      int32_t deltaTime = ellapsed - work->lastFrameTime;
       if (deltaTime > 0) {
-        work->lastFrameTime = frtTimerEllapsed();
+        work->lastFrameTime = ellapsed;
         work->tickCount += deltaTime;
+      }
+
+      if (work->timeEllapsed >= 1000) {
+        frtTimerStart(ellapsed - 1000);
+        work->lastFrameTime = frtTimerEllapsed();
       }
     } else {
         work->isDisplayReady = true;
+          if (work->audioWaitingToStart) {
+              work->audioWaitingToStart = false;
+              film_audio_play(0);
+          }
+      }
     }
-  }  
+  
+
+  if (work->stream.sampleCache.currentSample >=
+    work->stream.sampleCache.numSamples) {
+    work->play_status = END;
+  }
+
 }
 
 inline bool cpk_display_ready(decode_work_t *work) { return work->isDisplayReady; }

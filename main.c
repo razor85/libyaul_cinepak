@@ -28,9 +28,9 @@ uint32_t *vdp2DestinationBuffer = (uint32_t *) VDP2_VRAM_ADDR(0, 0);
 #define VIDEO_HEIGHT      240
 #define SAMPLE_CACHE_SIZE 24000
 
-film_sample_t sampleCache[SAMPLE_CACHE_SIZE];
+film_sample_t sampleCache[SAMPLE_CACHE_SIZE] __aligned(4);
 
-uint32_t decode_buffer[VIDEO_WIDTH * VIDEO_HEIGHT];
+uint32_t decode_buffer[VIDEO_WIDTH * VIDEO_HEIGHT] __aligned(4);
 
 int film_loop_handler() {
   smpc_peripheral_process();
@@ -213,10 +213,11 @@ void copyVideoFrame1(uint32_t movie_x, uint32_t movie_y, uint32_t *src, uint32_t
 
   while (src < src_stop1) {
     DMA_ScuMemCopy(dst, src, copy_size);
-    src += movie_x;
     if (color_depth == COLOR_DEPTH_15) {
+      src += SMP_DIV2(movie_x);
       dst += SMP_DIV2(SCL_MAXLINE);
     } else {
+      src += movie_x;
       dst += SCL_MAXLINE;
     }
   }
@@ -233,10 +234,12 @@ void copyVideoFrame1(uint32_t movie_x, uint32_t movie_y, uint32_t *src, uint32_t
 
   while (src < src_stop2) {
     DMA_ScuMemCopy(dst, src, copy_size);
-    src += movie_x;
+    //src += movie_x;
     if (color_depth == COLOR_DEPTH_15) {
+      src += SMP_DIV2(movie_x);
       dst += SMP_DIV2(SCL_MAXLINE);
     } else {
+      src += movie_x;
       dst += SCL_MAXLINE;
     }
   }
@@ -246,7 +249,7 @@ void copyVideoFrame1(uint32_t movie_x, uint32_t movie_y, uint32_t *src, uint32_t
 
 #define SMPCPK_VBL_COPY_MAX (352 * 120)
 void copyVideoFrame(uint32_t movie_x, uint32_t movie_y, uint32_t *src, uint32_t *dst, uint8_t color_depth) {
-    if (movie_x * movie_y <= SMPCPK_VBL_COPY_MAX) {
+    if (movie_x * movie_y <= SMPCPK_VBL_COPY_MAX || color_depth == COLOR_DEPTH_15) {
         copyVideoFrame1(movie_x, movie_y, src, dst, color_depth);
     } else {
         //This should need to be split between blanks, but it seems to work without doing this.
@@ -347,7 +350,7 @@ int main() {
         vdp2_sync();
         vdp2_sync_wait();
         sprintf((char *) LWRAM(80), "FILM INIT START");
-
+        memset(&work_area, 0, sizeof(decode_work_t));
         memset(&sampleCache, 0, SAMPLE_CACHE_SIZE * sizeof(film_sample_t));
         memset(&cpk->filmHeader, 0, sizeof(film_header));
 
@@ -382,9 +385,9 @@ int main() {
         uint32_t movie_y = cpk->filmHeader.fdsc.height;
         uint32_t *src = cpk->decodeParams->vramBuffAddr;
         uint32_t *dst = vdp2DestinationBuffer;
-        uint8_t colorDepth = cpk->filmHeader.fdsc.color_depth;
+        uint8_t colorDepth = cpk->decodeParams->decodeColorDepth;
 
-        copyVideoFrame(movie_x, movie_y, src, dst, colorDepth);
+         copyVideoFrame(movie_x, movie_y, src, dst, colorDepth);
         cpk_display_finished(cpk);
       }
 
@@ -395,6 +398,7 @@ int main() {
         sound_notify_driver();
 
         film_audio_reset();
+        memset(vdp2DestinationBuffer, 0, (512 * 256) * 4);
 
         dbgio_dev_font_load();
       }
@@ -405,7 +409,7 @@ int main() {
 
 void user_init(void) {
   const vdp2_scrn_bitmap_format_t format = {.scroll_screen = VDP2_SCRN_NBG0,
-    //.ccc = VDP2_SCRN_CCC_RGB_32768,
+    // .ccc = VDP2_SCRN_CCC_RGB_32768,
     .ccc = VDP2_SCRN_CCC_RGB_16770000,
     .bitmap_size = VDP2_SCRN_BITMAP_SIZE_512X256,
     .palette_base = 0x00000000,

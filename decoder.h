@@ -82,16 +82,14 @@ typedef struct {
 } __packed __aligned(4) binary_stream_t;
 
 typedef struct {
-  strip_codebook_t codebooks[MAX_STRIPS];
   uint32_t strip;
-
   uint32_t topX;
   uint32_t writeX;
   uint32_t bottomX;
-
   uint32_t topY;
   uint32_t writeY;
   uint32_t bottomY;
+  strip_codebook_t codebooks[MAX_STRIPS];
 
 } __packed __aligned(4) stripdata_t;
 
@@ -165,10 +163,11 @@ typedef struct {
   uint32_t dma_delta;
   bool audioPlaying;
   bool audioWaitingToStart;
+  stripdata_t stripData;
+  uint32_t padding;
   film_header filmHeader;
   binary_stream_t stream;
   film_sample_t nextSample;
-  stripdata_t stripData;
 } __packed __aligned(4) decode_work_t;
  
 extern uint32_t film_audio_get_next_buffer_size();
