@@ -137,6 +137,7 @@ typedef struct {
   uint32_t *sampleBuffAddr;
   uint32_t sampleBuffSize;
   uint32_t *vramBuffAddr;
+  uint32_t *vramWritePos;
   uint32_t vramBuffSize;
   uint16_t vramBufferWidth;
   uint32_t audioBufferAddr;

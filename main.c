@@ -175,7 +175,7 @@ void copyVideoFrame2(uint32_t movie_x, uint32_t movie_y, uint32_t *src, uint32_t
 	while (g_vbl_in == false);
 
 	/* Set bank B0 to CPU write mode */
-	CYCLE_CPU_WRITE(CYCLE_B_REG);
+   CYCLE_CPU_WRITE(CYCLE_B_REG);
 
 	while (src < src_stop2) {
 		DMA_ScuMemCopy(dst, src, copy_size);
@@ -253,8 +253,8 @@ void copyVideoFrame(uint32_t movie_x, uint32_t movie_y, uint32_t *src, uint32_t 
         copyVideoFrame1(movie_x, movie_y, src, dst, color_depth);
     } else {
         //This should need to be split between blanks, but it seems to work without doing this.
-        //copyVideoFrame2(movie_x, movie_y, src, dst, color_depth);
-      copyVideoFrame1(movie_x, movie_y, src, dst, color_depth);
+        copyVideoFrame2(movie_x, movie_y, src, dst, color_depth);
+      //copyVideoFrame1(movie_x, movie_y, src, dst, color_depth);
     }
 
 }
@@ -270,7 +270,7 @@ void DMA_ScuMemCopy(void *dst, void *src, uint32_t cnt) {
 
      scu_dma_config_set(0, SCU_DMA_START_FACTOR_ENABLE, &dma_handle, NULL);
      scu_dma_level_fast_start(0);
-     cpu_cache_purge();
+     //cpu_cache_purge();
 
 }
 
@@ -310,6 +310,13 @@ int main() {
   scu_timer_t0_value_set(122);
   scu_timer_t0_set(_scu_timer_0_handler);
   scu_timer_enable();
+  uint32_t movie_lx, movie_ly;
+  uint32_t movie_x;
+  uint32_t movie_y;
+  uint32_t *vram_addr;
+
+  g_vbl_in = false;
+  g_time_on = false;
 
   vdp2_sync();
   while (true) {
@@ -357,6 +364,7 @@ int main() {
         params.sampleBuffAddr = &sampleCache;
         params.sampleBuffSize = SAMPLE_CACHE_SIZE * sizeof(film_sample_t);
         params.vramBuffAddr = &decode_buffer;
+        params.vramWritePos = &decode_buffer;
         params.vramBufferWidth = VIDEO_WIDTH;
         params.vramBuffSize = (VIDEO_WIDTH * VIDEO_HEIGHT) * 4;
         params.decodeColorDepth = COLOR_DEPTH_24;
@@ -372,6 +380,15 @@ int main() {
         cpk->play_status = 0;
 
         init_film(movieEntries[menuSelection], cpk, 240, 320);
+        movie_x = cpk->filmHeader.fdsc.width;
+        movie_y = cpk->filmHeader.fdsc.height;
+
+        movie_lx = (VIDEO_WIDTH - movie_x) / 2;
+        movie_ly = (VIDEO_HEIGHT - movie_y) / 2;
+        vram_addr =
+          (uint32_t *) (VDP2_VRAM_ADDR(0, 0) +
+                          4 * (SCL_MAXLINE * movie_ly + movie_lx));
+
 
         cpk_play(cpk);
 
@@ -381,13 +398,9 @@ int main() {
       cpk_task(cpk);
 
       if (cpk->isDisplayReady == true) {
-        uint32_t movie_x = cpk->filmHeader.fdsc.width;
-        uint32_t movie_y = cpk->filmHeader.fdsc.height;
-        uint32_t *src = cpk->decodeParams->vramBuffAddr;
-        uint32_t *dst = vdp2DestinationBuffer;
         uint8_t colorDepth = cpk->decodeParams->decodeColorDepth;
 
-         copyVideoFrame(movie_x, movie_y, src, dst, colorDepth);
+        copyVideoFrame(movie_x, movie_y, decode_buffer, vram_addr, colorDepth);
         cpk_display_finished(cpk);
       }
 

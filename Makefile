@@ -12,7 +12,7 @@ SH_SRCS :=   \
   pcmsys.c
 
 SH_LIBRARIES:=
-SH_CFLAGS+= -I. -Ofast -g -Wall
+SH_CFLAGS+= -I. -Os -g -Wall
 IP_VERSION:= V1.000
 IP_RELEASE_DATE:= 20220720
 IP_AREAS:= JTUBKAEL
