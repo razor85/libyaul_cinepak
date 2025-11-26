@@ -60,13 +60,13 @@ static void queueDiskRead(uint32_t fad, uint32_t size) {
 }
 
 static uint32_t getSectorsReady(uint32_t wantSectors) {
-  uint32_t sectorsReady;
+  int32_t sectorsReady;
   while (true) {
     sectorsReady = cd_block_cmd_sector_number_get(0);
     if (sectorsReady >= wantSectors) {
       break;
     } else {
-      for (volatile uint32_t i = 0; i < 1024; ++i) { cpu_instr_nop(); }
+      for (volatile int32_t i = 0; i < 1024; ++i) { cpu_instr_nop(); }
     }
   }
 
@@ -76,7 +76,7 @@ static uint32_t getSectorsReady(uint32_t wantSectors) {
 static void waitUntilCdDataIsAvailable() {
   // Wait until data is available
   bool ready __unused = false;
-  for (volatile uint32_t i = 0; i < 240000; ++i) {
+  for (volatile int32_t i = 0; i < 240000; ++i) {
     if (MEMORY_READ(16, CD_BLOCK(HIRQ)) & DRDY) {
       ready = true;
       break;

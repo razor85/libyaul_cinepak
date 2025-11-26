@@ -26,7 +26,7 @@ typedef struct {
 } codebook_t;
 
 typedef struct {
-  uint32_t color[4];
+  int32_t color[4];
 } codebookRGB_t;
 
 typedef struct {
@@ -43,23 +43,23 @@ typedef struct {
   uint32_t interval; // 0xFFFFFFFF if audio
   uint32_t length;
   uint32_t padding;
-} __packed __aligned(4) film_sample_t;
+} __packed __aligned(4) old_sample_t;
 
 // A sample stored in the STAB table is:
 typedef struct {
-  uint32_t offset;
-  uint32_t length;
-  uint32_t info1;
-  uint32_t info2;
-} __packed __aligned(4) cd_film_sample_t;
+  uint8_t *offset;
+  int32_t length;
+  int32_t time;
+  int32_t duration;
+} __packed __aligned(4) film_sample_t;
 
 typedef struct {
-  uint32_t numSamples;
-  uint32_t currentSample;
-  uint32_t currentBuffSample;
-  uint32_t pcmBytesPerBlank;
-  uint32_t remainingPcmBytes;
-  uint32_t pcmPlayPosition;
+  int32_t numSamples;
+  int32_t currentSample;
+  int32_t currentBuffSample;
+  int32_t pcmBytesPerBlank;
+  int32_t remainingPcmBytes;
+  int32_t pcmPlayPosition;
   uint8_t *ringBuffStart;
   uint8_t *ringBuffEnd;
   uint8_t *writePos;
@@ -68,12 +68,12 @@ typedef struct {
 } __packed __aligned(4) film_sample_cache_t;
 
 typedef struct {
-  uint32_t startFAD;
-  uint32_t size;
-  uint32_t remainingSectors;
+  int32_t startFAD;
+  int32_t size;
+  int32_t remainingSectors;
 
-  uint32_t dataAvailable;
-  uint32_t offset;
+  int32_t dataAvailable;
+  int32_t offset;
 
   film_sample_cache_t sampleCache;
 
@@ -82,19 +82,19 @@ typedef struct {
 } __packed __aligned(4) binary_stream_t;
 
 typedef struct {
-  uint32_t strip;
-  uint32_t topX;
-  uint32_t writeX;
-  uint32_t bottomX;
-  uint32_t topY;
-  uint32_t writeY;
-  uint32_t bottomY;
+  int32_t strip;
+  int32_t topX;
+  int32_t writeX;
+  int32_t bottomX;
+  int32_t topY;
+  int32_t writeY;
+  int32_t bottomY;
   strip_codebook_t codebooks[MAX_STRIPS];
 
 } __packed __aligned(4) stripdata_t;
 
 typedef struct {
-  uint32_t offset;
+  int32_t offset;
   int32_t size;
   int32_t play_tick;
   int32_t duration_ticks;
@@ -104,49 +104,50 @@ typedef struct {
 
 typedef struct {
   char stab_str[4];
-  uint32_t stab_size;
-  uint32_t ticks_per_second;
-  uint32_t total_entries;
-  cd_film_sample_t entries[0];
+  int32_t stab_size;
+  int32_t ticks_per_second;
+  int32_t total_entries;
+  film_sample_t entries[0];
 } __packed __aligned(4) stab_table;
 
 typedef struct {
   char fdsc_str[4];
-  uint32_t fdsc_size;
+  int32_t fdsc_size;
   char fourcc[4];
-  uint32_t height;
-  uint32_t width;
-  uint8_t color_depth;      // Usually 24
-  uint8_t sound_channels;   // 1 or 2
-  uint8_t sound_resolution; // 8 bit or 16 bit
-  uint8_t sound_codec;      // 0 = PCM, 1 = Sega ADPCM, 2= ADX
-  uint32_t sample_rate;
-  uint32_t chroma_key;
+  int32_t height;
+  int32_t width;
+  int8_t color_depth;      // Usually 24
+  int8_t sound_channels;   // 1 or 2
+  int8_t sound_resolution; // 8 bit or 16 bit
+  int8_t sound_codec;      // 0 = PCM, 1 = Sega ADPCM, 2= ADX
+  int32_t sample_rate;
+  int32_t chroma_key;
 } __packed __aligned(4) frame_description;
 
 typedef struct {
   char film_str[4];
-  uint32_t header_size;
-  uint32_t version;
-  uint32_t reserved;
+  int32_t header_size;
+  int32_t version;
+  int32_t reserved;
   frame_description fdsc;
   stab_table stab;
 } __packed __aligned(4) film_header;
 
 typedef struct {
   uint32_t *sampleBuffAddr;
-  uint32_t sampleBuffSize;
+  int32_t sampleBuffSize;
   uint32_t *vramBuffAddr;
   uint32_t *vramWritePos;
-  uint32_t vramBuffSize;
-  uint16_t vramBufferWidth;
-  uint32_t audioBufferAddr;
-  uint32_t audioBufferSize;
-  uint8_t decodeColorDepth;
+  int32_t vramBuffSize;
+  int16_t vramBufferWidth;
+  int32_t vramDelta;
+  int32_t audioBufferAddr;
+  int32_t audioBufferSize;
+  int8_t decodeColorDepth;
   bool audioEnable;
-  uint8_t pcmChannels;
-  uint8_t pcmVolume;
-  uint8_t pcmPan;
+  int8_t pcmChannels;
+  int8_t pcmVolume;
+  int8_t pcmPan;
 } __packed __aligned(4) decode_param_t;
 
 typedef struct {
@@ -154,33 +155,33 @@ typedef struct {
   playback_status_t play_status;
   bool isDisplayReady;
   bool displayWaiting;
-  uint32_t timeEllapsed;
-  uint32_t frtOverflowCount;
-  uint32_t ticksUntilNextFrame;
-  uint32_t tickCount;
-  uint32_t lastFrameTime;
-  uint32_t copyingVideoFrame;
-  uint32_t videoStartY;
-  uint32_t dma_delta;
+  int32_t timeEllapsed;
+  int32_t frtOverflowCount;
+  int32_t ticksUntilNextFrame;
+  int32_t tickCount;
+  int32_t lastFrameTime;
+  int32_t copyingVideoFrame;
+  int32_t videoStartY;
+  int32_t dma_delta;
   bool audioPlaying;
   bool audioWaitingToStart;
   stripdata_t stripData;
-  uint32_t padding;
+  int32_t padding;
   film_header filmHeader;
   binary_stream_t stream;
   film_sample_t nextSample;
 } __packed __aligned(4) decode_work_t;
  
-extern uint32_t film_audio_get_next_buffer_size();
+extern int32_t film_audio_get_next_buffer_size();
 
 extern uint16_t *film_audio_get_next_buffer_ptr(uint8_t slot);
 
-extern void film_audio_notify_read_buffer_bytes(uint32_t length);
+extern void film_audio_notify_read_buffer_bytes(int32_t length);
 
-extern void film_audio_play(uint32_t bufferLength);
+extern void film_audio_play(int32_t bufferLength);
 
 extern void film_audio_setup(decode_work_t *work, 
-  uint16_t frequency, uint32_t numChannels, uint32_t sampleResolution);
+  int16_t frequency, int32_t numChannels, int32_t sampleResolution);
 
 extern void film_audio_prepare_to_play();
 
@@ -188,7 +189,7 @@ extern void film_audio_prepare_to_play();
 extern int film_loop_handler();
 
 extern void init_film(cdfs_filelist_entry_t *fsEntry, decode_work_t *work,
-  uint32_t vdp_height, uint32_t vdp_width);
+  int32_t vdp_height, int32_t vdp_width);
 
 extern void cpk_play(decode_work_t *work);
 

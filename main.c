@@ -46,56 +46,6 @@ cdfs_filelist_entry_t *soundDriverEntry = NULL;
 const char *soundDriverName = "SNDDRV.BIN";
 volatile uint16_t soundDriverData[8192] = {0};
 
-uint8_t *baseSoundMemory = NULL;
-uint8_t *soundMemory = NULL;
-uint8_t *soundMemoryLimit = NULL;
-
-inline uint32_t film_audio_get_next_buffer_size() {
-  uint32_t size = (uint32_t)(soundMemoryLimit - soundMemory);
-  if (size == 0) {
-    soundMemory = baseSoundMemory;
-    size = (uint32_t)(soundMemoryLimit - soundMemory);
-  }
-  return size;
-}
-
-inline uint16_t *film_audio_get_next_buffer_ptr(uint8_t slot) {
-  
-  return (uint16_t *) soundMemory + (slot * getSlotSize());
-}
-
-inline void film_audio_notify_read_buffer_bytes(uint32_t length) {
-  soundMemory += length;
-
-  if (soundMemory >= soundMemoryLimit) {
-    soundMemory = baseSoundMemory;
-  }
-}
-
-inline void film_audio_play(uint32_t bufferLength __unused) {
-  pcmStreamPlay(7);
-  sound_notify_driver();
-}
-
-void film_audio_setup(decode_work_t *work, uint16_t frequency, uint32_t channels, uint32_t numBits) {
-  // TODO: Proper stereo
-  pcmStreamConfigure(channels == 2 ? 1 : 1, numBits, frequency);
-  baseSoundMemory = getSlotAddress(0);
-  soundMemory = baseSoundMemory;
-  soundMemoryLimit = baseSoundMemory + getSlotSize();
-  work->decodeParams->audioBufferAddr = getSlotAddress(0);
-  work->decodeParams->audioBufferSize = getSlotSize();
-  work->stream.sampleCache.pcmPlayPosition = getSlotAddress(0);
-}
-
-void film_audio_prepare_to_play() {}
-
-void film_audio_reset() {
-  baseSoundMemory = NULL;
-  soundMemory = NULL;
-  soundMemoryLimit = NULL;
-}
-
 void loadSoundDriver() {
   queueDiskRead(soundDriverEntry->starting_fad, soundDriverEntry->size);
 
@@ -152,7 +102,7 @@ void copyVideoFrame2(uint32_t movie_x, uint32_t movie_y, uint32_t *src, uint32_t
     uint32_t *src_stop2 = src + movie_x * movie_y;
 
 	g_time_on = false;
-	while (g_time_on == false) ;
+	while (g_time_on == false);
 	g_vbl_in = false;
 
     /* Set bank A0 to CPU write mode */
@@ -254,7 +204,7 @@ void copyVideoFrame(uint32_t movie_x, uint32_t movie_y, uint32_t *src, uint32_t 
     } else {
         //This should need to be split between blanks, but it seems to work without doing this.
         copyVideoFrame2(movie_x, movie_y, src, dst, color_depth);
-      //copyVideoFrame1(movie_x, movie_y, src, dst, color_depth);
+       //copyVideoFrame1(movie_x, movie_y, src, dst, color_depth);
     }
 
 }
@@ -309,7 +259,7 @@ int main() {
   decode_param_t params;
   scu_timer_t0_value_set(122);
   scu_timer_t0_set(_scu_timer_0_handler);
-  scu_timer_enable();
+  scu_timer_line_enable();
   uint32_t movie_lx, movie_ly;
   uint32_t movie_x;
   uint32_t movie_y;
@@ -366,20 +316,22 @@ int main() {
         params.vramBuffAddr = &decode_buffer;
         params.vramWritePos = &decode_buffer;
         params.vramBufferWidth = VIDEO_WIDTH;
+        params.vramDelta = VIDEO_WIDTH * 3;
         params.vramBuffSize = (VIDEO_WIDTH * VIDEO_HEIGHT) * 4;
         params.decodeColorDepth = COLOR_DEPTH_24;
         //Currently not used, eventually should use these and set them to what's in the FILM Header. 
-        //params.pcmVolume = 7;
-        //params.pcmChannels = 2;
-        //params.pcmPan = 16;
+        params.pcmVolume = 7;
+        params.pcmChannels = 2;
+        params.pcmPan = 0;
         // Currently not used, should be used eventually to allow the user to define what slots and addresses to use for audio.
-        //params.audioBufferAddr = getSlotAddress(0);
-        //params.audioBufferSize = pcmStreamBufferSize(16, 22050);
+        params.audioBufferAddr = getSlotAddress(0);
+        params.audioBufferSize = getSlotSize();
 
         cpk->decodeParams = &params;
         cpk->play_status = 0;
 
         init_film(movieEntries[menuSelection], cpk, 240, 320);
+        cpk->stream.sampleCache.pcmPlayPosition = getSlotAddress(0);
         movie_x = cpk->filmHeader.fdsc.width;
         movie_y = cpk->filmHeader.fdsc.height;
 
