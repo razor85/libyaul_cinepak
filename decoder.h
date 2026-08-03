@@ -19,6 +19,13 @@ typedef enum {
   INIT = 4
 } playback_status_t;
 
+typedef enum {
+    PCM_XFER_CPU = 0,
+    PCM_XFER_SH2_DMA = 1,
+    PCM_XFER_SCU_DMA = 2, // Currently not supported
+    PCM_XFER_SCU_DSP_DMA = 3, // Currently not supported.
+} pcm_transfer_mode_t;
+
 typedef struct {
   uint8_t y[4];
   int8_t u;
@@ -38,14 +45,6 @@ typedef struct {
 // a video (0) or audio sample (1). If it is a video sample, the rest of the
 // data holds the 'info2' field from the STAB data and if its audio, it holds
 // the sample length.
-typedef struct {
-  uint8_t *offset;
-  uint32_t interval; // 0xFFFFFFFF if audio
-  uint32_t length;
-  uint32_t padding;
-} __packed __aligned(4) old_sample_t;
-
-// A sample stored in the STAB table is:
 typedef struct {
   uint8_t *offset;
   int32_t length;
@@ -140,6 +139,7 @@ typedef struct {
   uint32_t *vramWritePos;
   int32_t vramBuffSize;
   int16_t vramBufferWidth;
+  int16_t vramBufferHeight;
   int32_t vramDelta;
   int32_t audioBufferAddr;
   int32_t audioBufferSize;
@@ -148,6 +148,7 @@ typedef struct {
   int8_t pcmChannels;
   int8_t pcmVolume;
   int8_t pcmPan;
+  pcm_transfer_mode_t pcmTransferMode;
 } __packed __aligned(4) decode_param_t;
 
 typedef struct {
@@ -170,6 +171,8 @@ typedef struct {
   film_header filmHeader;
   binary_stream_t stream;
   film_sample_t nextSample;
+  bool hasVideoSamples;
+  int32_t lastAudioSampleIndex;
 } __packed __aligned(4) decode_work_t;
  
 extern int32_t film_audio_get_next_buffer_size();
@@ -178,7 +181,7 @@ extern uint16_t *film_audio_get_next_buffer_ptr(uint8_t slot);
 
 extern void film_audio_notify_read_buffer_bytes(int32_t length);
 
-extern void film_audio_play(int32_t bufferLength);
+extern void film_audio_play(uint8_t volume);
 
 extern void film_audio_setup(decode_work_t *work, 
   int16_t frequency, int32_t numChannels, int32_t sampleResolution);

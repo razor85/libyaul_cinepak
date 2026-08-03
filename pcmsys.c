@@ -102,6 +102,15 @@ void smpc_issue_command(unsigned char cmd) {
 }
 
 void pcmsys_load_driver(void *buffer, uint32_t length) {
+  // The immediacy of these commands is important.
+  // As per SEGA technical bulletin 51, the Sound CPU is not to be turned off
+  // for more than 0.5 seconds.
+
+  // Turn off Sound CPU
+  do {
+    smpc_issue_command(SMPC_CMD_SNDOFF);
+  } while (SMPC_REG_SF & 0x1);
+  smpc_wait_till_ready();
   // Make sure SCSP is set to 512k mode
   *(volatile uint8_t *) (0x25B00400) = 0x02;
 
@@ -110,13 +119,10 @@ void pcmsys_load_driver(void *buffer, uint32_t length) {
     *(volatile uint32_t *) (SNDRAM + i) = 0x00000000;
   }
 
-  // The immediacy of these commands is important.
-  // As per SEGA technical bulletin 51, the Sound CPU is not to be turned off
-  // for more than 0.5 seconds.
-
-  // Turn off Sound CPU
-  smpc_issue_command(SMPC_CMD_SNDOFF);
-  smpc_wait_till_ready();
+  // clear DSP RAM:
+  for (uint16_t i = 0; i < 0x400; i += 2) {
+    *(volatile uint16_t *) (DSPRAM + i) = 0x0000;
+  }
 
   // Set max master volume + 4mbit memory
   *master_volume = 0x20F;
@@ -145,8 +151,10 @@ void pcmsys_load_driver(void *buffer, uint32_t length) {
   }
 
   // Turn on Sound CPU again
+  do {
+    smpc_issue_command(SMPC_CMD_SNDON);
+  } while (SMPC_REG_SF & 0x1);
   smpc_wait_till_ready();
-  smpc_issue_command(SMPC_CMD_SNDON);
 
   m68k_com->start = 0xFFFF;
 }
@@ -181,8 +189,9 @@ uint8_t *getSlotAddress(uint32_t slot) {
 
 inline uint32_t getSlotSize() { return (128 * 1024); }
 
-uint32_t pcmStreamBufferSize(uint8_t bits __unused, uint16_t frequency __unused) {
-  return getSlotSize();
+uint32_t pcmStreamBufferSize(uint8_t bits, uint16_t frequency __unused) {
+  // Capped at unsigned short's max sample count and kept a multiple of 4.
+  return (bits == 8) ? 65532 : 131068;
 }
 
 void pcmsys_load_16bit_pcm_slot(uint32_t length, uint16_t sampleRate,
@@ -203,7 +212,7 @@ void pcmsys_load_16bit_pcm_slot(uint32_t length, uint16_t sampleRate,
     (unsigned short) (destinationAddress & 0xFFFF);
 
   m68k_com->pcmCtrl[slot].pitchword = convert_bitrate_to_pitchword(sampleRate);
-  m68k_com->pcmCtrl[slot].playsize = length;
+  m68k_com->pcmCtrl[slot].playsize = length >> 1;
   m68k_com->pcmCtrl[slot].bytes_per_blank =
     calculate_bytes_per_blank(sampleRate, false, PCM_SYS_REGION);
   m68k_com->pcmCtrl[slot].bitDepth = PCM_TYPE_16BIT;
@@ -260,6 +269,7 @@ void pcmStreamInitialize() {
     cpu_instr_nop();
   }
 
+  pcmStreamStopAllVoices();
   pcmStreamClear();
 }
 
@@ -299,6 +309,12 @@ bool pcmStreamPlay(uint8_t volume) {
   pcmStream.isPlaying = true;
   pcmStream.volume = volume;
   return true;
+}
+
+void pcmStreamStopAllVoices(void) {
+  for (volatile uint32_t i = 0; i < PCM_CTRL_MAX; i++) {
+    pcm_cease(i);
+  }
 }
 
 bool pcmStreamStop() {

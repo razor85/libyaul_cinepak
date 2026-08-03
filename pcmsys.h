@@ -42,6 +42,9 @@
 // No Touchy Sound Ram Start!
 #define SNDRAM (0x25a00000)
 
+// No Touchy DSP Sound Ram Start!
+#define DSPRAM (0x25B00800)
+
 // 1KB here is reserved for interrupts
 #define SNDPRG (SNDRAM + 0x408)
 
@@ -304,6 +307,7 @@ void pcm_cease(short pcmNumber);
 void sound_notify_driver(void);
 
 void pcmStreamInitialize();
+void pcmStreamStopAllVoices(void);
 void pcmStreamConfigure(uint8_t channels, uint8_t bits, uint16_t frequency);
 bool pcmStreamPlay(uint8_t volume);
 bool pcmStreamStop();

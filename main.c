@@ -18,15 +18,17 @@ volatile bool g_vbl_in = false;
 
 volatile bool g_time_on = false;
 
+volatile bool canPress = true;
+
 uint32_t work_area[sizeof(decode_work_t)];
 
 uint32_t *vdp2DestinationBuffer = (uint32_t *) VDP2_VRAM_ADDR(0, 0);
 
-#define MOVIE_LIST_ENTRIES 40
+#define MOVIE_LIST_ENTRIES 20
 
 #define VIDEO_WIDTH       320
 #define VIDEO_HEIGHT      240
-#define SAMPLE_CACHE_SIZE 24000
+#define SAMPLE_CACHE_SIZE 20000
 
 film_sample_t sampleCache[SAMPLE_CACHE_SIZE] __aligned(4);
 
@@ -268,6 +270,7 @@ int main() {
   g_vbl_in = false;
   g_time_on = false;
 
+
   vdp2_sync();
   while (true) {
     smpc_peripheral_process();
@@ -316,6 +319,7 @@ int main() {
         params.vramBuffAddr = &decode_buffer;
         params.vramWritePos = &decode_buffer;
         params.vramBufferWidth = VIDEO_WIDTH;
+        params.vramBufferHeight = VIDEO_HEIGHT;
         params.vramDelta = VIDEO_WIDTH * 3;
         params.vramBuffSize = (VIDEO_WIDTH * VIDEO_HEIGHT) * 4;
         params.decodeColorDepth = COLOR_DEPTH_24;
@@ -323,6 +327,7 @@ int main() {
         params.pcmVolume = 7;
         params.pcmChannels = 2;
         params.pcmPan = 0;
+        params.pcmTransferMode = PCM_XFER_SH2_DMA;
         // Currently not used, should be used eventually to allow the user to define what slots and addresses to use for audio.
         params.audioBufferAddr = getSlotAddress(0);
         params.audioBufferSize = getSlotSize();
@@ -345,6 +350,13 @@ int main() {
         cpk_play(cpk);
 
         restart = false;
+      }
+
+      if (pad0.released.button.y && canPress) {
+          if (cpk->play_status == PLAY || cpk->play_status == PAUSE) {
+            cpk->play_status = STOP;
+          }
+          canPress = false;
       }
 
       cpk_task(cpk);
@@ -498,6 +510,7 @@ static void _vblank_in_handler(void *work __unused) { g_vbl_in = true;}
 
 static void _vblank_out_handler(void *work __unused) {
   smpc_peripheral_intback_issue();
+  canPress = true;
 }
 
 _scu_timer_0_handler(void) { g_time_on = true; }
