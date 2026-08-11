@@ -5,11 +5,17 @@ endif
 include $(YAUL_INSTALL_ROOT)/share/build.pre.mk
 
 SH_PROGRAM:= cinepak_player
-SH_SRCS :=   \
-  base.c     \
-  decoder.c  \
-  main.c     \
-  pcmsys.c
+SH_SRCS :=       \
+  adx_dsp_sega.c \
+  base.c         \
+  film_buff.c    \
+  film_cvid.c    \
+  film_lib.c     \
+  film_snd.c     \
+  main.c         \
+  pcmsys.c       \
+  scsp_dsp.c     \
+  snd_adx.c
 
 SH_LIBRARIES:=
 SH_CFLAGS+= -I. -O2 -g -fno-lto -Wall

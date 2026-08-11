@@ -312,4 +312,6 @@ void pcmStreamConfigure(uint8_t channels, uint8_t bits, uint16_t frequency);
 bool pcmStreamPlay(uint8_t volume);
 bool pcmStreamStop();
 
+void clearDspRam();
+
 #endif

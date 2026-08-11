@@ -1,0 +1,256 @@
+#include "film_lib.h"
+#include "cd.h"
+#include "film_buff.h"
+#include "film_cvid.h"
+#include "film_snd.h"
+#include "snd_adx.h"
+#include "adx_dsp_sega.h"
+
+int32_t lwrambuffer = 80;
+
+static uint32_t bytesNeededForCurrentSample = 0;
+
+static inline bool sampleIsReady(decode_work_t *work) {
+  return work->stream.sampleCache.currentSample <
+      work->stream.sampleCache.numSamples &&
+    film_buff_async_bytes_delivered() >= bytesNeededForCurrentSample;
+}
+
+static inline void advanceReadyThreshold(decode_work_t *work) {
+  film_sample_cache_t *cache = &work->stream.sampleCache;
+  if (cache->currentSample < cache->numSamples) {
+    bytesNeededForCurrentSample += (uint32_t) cache->samples[cache->currentSample].length;
+  }
+}
+
+// Timer
+volatile int32_t frtOverflowCount = 0;
+const int32_t frtTimerDiv = CPU_FRT_NTSC_320_128_COUNT_1MS;
+const int32_t frtTimerMul = (1 << 16) / frtTimerDiv; // scale factor
+
+static inline int32_t frtTimerEllapsed(void);
+
+void init_film_start(cdfs_filelist_entry_t *fsEntry, decode_work_t *work,
+  int32_t vdp_height __unused, int32_t vdp_width) {
+  initClampLUT24();
+  film_buff_reset_async_state();
+  queueDiskRead(fsEntry->starting_fad, fsEntry->size);
+
+  stream_new(&work->stream, fsEntry, work->decodeParams->sampleBuffAddr,
+    work->decodeParams->sampleBuffSize);
+
+  char *filmPtr = (char *) &work->filmHeader;
+  while (filmPtr[0] != 'F') {
+    stream_readbytes(&work->stream, (uint16_t *) &work->filmHeader, sizeof(film_header));
+    scu_dma_level_wait(0);
+  }
+
+  stripdata_new(&work->stripData, work->filmHeader.fdsc.height, work->filmHeader.fdsc.width);
+
+  film_audio_setup(work, work->filmHeader.fdsc.sample_rate >> 16,
+    work->filmHeader.fdsc.sound_channels,
+    work->filmHeader.fdsc.sound_resolution);
+
+  if (work->filmHeader.fdsc.sound_codec == FDSC_CODEC_ADX) {
+    work->parseAudioFn = (work->filmHeader.fdsc.sound_channels == 2) ?
+      parseStereoADXAudio : parseMonoADXAudio;
+    film_audio_adx_reset_history();
+  } else {
+    work->parseAudioFn = (work->filmHeader.fdsc.sound_channels == 2) ?
+      parseAudioStereo : parseAudioMono;
+  }
+
+  work->stream.sampleCache.currentSample = 0;
+  work->stream.sampleCache.currentBuffSample = 0;
+  work->stream.sampleCache.numSamples = work->filmHeader.stab.total_entries;
+  work->stream.sampleCache.remainingPcmBytes = 0;
+  if (work->filmHeader.fdsc.sound_resolution == 8) {
+    work->stream.sampleCache.pcmBytesPerBlank = calculate_bytes_per_blank(
+      work->filmHeader.fdsc.sample_rate >> 16, true, false);
+  } else {
+    work->stream.sampleCache.pcmBytesPerBlank = calculate_bytes_per_blank(
+      work->filmHeader.fdsc.sample_rate >> 16, false, false);
+  }
+
+  film_sample_cache_new(&work->stream, work->filmHeader.stab.total_entries);
+
+  bytesNeededForCurrentSample = (uint32_t) work->stream.sampleCache.samples[0].length;
+
+  work->hasVideoSamples = false;
+  for (int32_t i = 0; i < work->filmHeader.stab.total_entries; i++) {
+    if (work->stream.sampleCache.samples[i].time != 0xFFFFFFFF) {
+      work->hasVideoSamples = true;
+      break;
+    }
+  }
+
+  work->lastAudioSampleIndex = -1;
+  for (int32_t i = work->filmHeader.stab.total_entries - 1; i >= 0; i--) {
+    if (work->stream.sampleCache.samples[i].time == 0xFFFFFFFF) {
+      work->lastAudioSampleIndex = i;
+      break;
+    }
+  }
+
+  cpu_divu_32_32_set((work->stream.sampleCache.samples[0].duration * 1000), work->filmHeader.stab.ticks_per_second);
+
+  work->isDisplayReady = false;
+  work->displayWaiting = false;
+
+  work->videoStartY = 0;
+  work->dma_delta = work->videoStartY * vdp_width;
+  work->audioPlaying = false;
+  readBytesIntoRingBuff(&work->stream);
+  uint32_t syncPrefillBytes = 0;
+  for (int32_t i = 0; i < work->stream.sampleCache.currentBuffSample; i++) {
+    syncPrefillBytes += (uint32_t) work->stream.sampleCache.samples[i].length;
+  }
+  film_buff_credit_async_bytes_delivered(syncPrefillBytes);
+  
+  work->play_status = INIT;
+}
+
+inline static void frtTimerStart(uint16_t count) {
+  cpu_frt_count_set(count);
+  frtOverflowCount = 0;
+}
+
+void frtOviHandler() { frtOverflowCount++; }
+
+inline static int32_t frtTimerEllapsed() {
+  int32_t ticks = (0xFFFF * frtOverflowCount) + cpu_frt_count_get();
+  return (ticks * frtTimerMul) >> 16;
+}
+
+void cpk_play(decode_work_t *work) {
+  // Ask the sound driver to stop the warm up sound and get ready to start
+  // processing sounds
+  film_audio_prepare_to_play();
+
+  cpu_frt_ovi_set(frtOviHandler);
+  frtTimerStart(0);
+
+  work->frtOverflowCount = 0;
+  work->ticksUntilNextFrame = 0;
+  work->tickCount = 0;
+  work->copyingVideoFrame = 0;
+  work->audioWaitingToStart = false;
+  work->isDisplayReady = false;
+  work->displayWaiting = false;
+  work->lastFrameTime = frtTimerEllapsed();
+  work->play_status = PLAY;
+}
+
+void cpk_task(decode_work_t *work) {
+  switch (work->play_status) {
+  case STOP:
+    work->play_status = END;
+    break;
+  case PAUSE:
+    // TODO: Implement pause logic.
+    break;
+  case PLAY:
+    handle_play(work);
+    break;
+  case INIT:
+    cpk_play(work);
+    break;
+  default:
+    break;
+  }
+}
+
+void handle_play(decode_work_t *work) {
+  pollAudioConfirmTimer();
+  asyncReadBytesIntoRingBuff(&work->stream);
+  if (work->filmHeader.fdsc.sound_codec == FDSC_CODEC_ADX) {
+    adx_dsp_remute_dry_output();
+  }
+
+  if (sampleIsReady(work)) {
+        film_sample_t *sample =
+          &work->stream.sampleCache.samples[work->stream.sampleCache.currentSample];
+        if (sample->time == 0xFFFFFFFF) {
+          if (work->stream.sampleCache.remainingPcmBytes == 0) {
+            work->nextSample = *sample;
+            work->stream.sampleCache.readPos = sample->offset;
+
+            if (work->filmHeader.fdsc.sound_codec == FDSC_CODEC_ADX) {
+              int32_t remainingPcmBytes;
+              int32_t headerSize = snd_adx_begin_chunk(
+                work->stream.sampleCache.readPos, work->nextSample.length,
+                work->filmHeader.fdsc.sound_channels, &remainingPcmBytes);
+              work->stream.sampleCache.readPos += headerSize;
+              work->nextSample.length -= headerSize;
+              work->stream.sampleCache.remainingPcmBytes = remainingPcmBytes;
+            } else {
+              work->stream.sampleCache.remainingPcmBytes =
+                (work->filmHeader.fdsc.sound_channels == 2) ?
+                  work->nextSample.length >> 1 : work->nextSample.length;
+            }
+          }
+          if (work->parseAudioFn(work)) {
+            if (work->stream.sampleCache.currentSample ==
+              work->lastAudioSampleIndex) {
+              film_audio_fill_silence(work);
+            }
+            work->stream.sampleCache.currentSample++;
+            advanceReadyThreshold(work);
+          }
+        }
+  }
+  if (!work->displayWaiting) {
+    if (sampleIsReady(work)) {
+          film_sample_t *sample =
+            &work->stream.sampleCache.samples[work->stream.sampleCache.currentSample];
+          if (sample->time != 0xFFFFFFFF) {
+            work->nextSample = *sample;
+            work->stream.sampleCache.currentSample++;
+            advanceReadyThreshold(work);
+            work->stream.sampleCache.readPos = work->nextSample.offset;
+            cpu_divu_32_32_set((work->nextSample.duration * 1000), work->filmHeader.stab.ticks_per_second);
+            parseVideo(work);
+            work->decodeParams->vramWritePos = work->decodeParams->vramBuffAddr;
+            work->ticksUntilNextFrame = cpu_divu_quotient_get();
+            work->displayWaiting = true;
+            if (work->audioWaitingToStart == true) {
+              film_audio_play(work->decodeParams->pcmVolume);
+              work->audioWaitingToStart = false;
+              work->audioPlaying = true;
+            }
+          }
+    }
+  }
+
+  if (work->displayWaiting) {
+
+    if (work->tickCount < work->ticksUntilNextFrame) {
+      int32_t ellapsed = frtTimerEllapsed();
+      work->timeEllapsed = ellapsed;
+      int32_t deltaTime = ellapsed - work->lastFrameTime;
+      if (deltaTime > 0) {
+        work->lastFrameTime = ellapsed;
+        work->tickCount += deltaTime;
+      }
+      if (work->timeEllapsed >= 1000) {
+        frtTimerStart(ellapsed - 1000);
+        work->lastFrameTime = frtTimerEllapsed();
+      }
+    } else {
+        work->isDisplayReady = true;
+    }
+  }
+  if (work->stream.sampleCache.currentSample >=
+    work->stream.sampleCache.numSamples) {
+    work->play_status = END;
+  }
+
+}
+
+inline bool cpk_display_ready(decode_work_t *work) { return work->isDisplayReady; }
+
+inline void cpk_display_finished(decode_work_t *work) {
+  work->tickCount = 0;
+  work->isDisplayReady = false;
+  work->displayWaiting = false;
+}

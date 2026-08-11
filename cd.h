@@ -1,5 +1,17 @@
-#ifndef DECODER_CD_H
-#define DECODER_CD_H
+#ifndef DECODER_CD_OLD_H
+#define DECODER_CD_OLD_H
+
+// Drop-in alternate to cd.h/cd_sega.h: literal port of the CD block
+// interface from the older build at
+// D:\SaturnDocker\Yaul\libyaul_cinepak-old, which has tested stable on real
+// hardware. Deliberately NOT merged with any of this session's later
+// additions (filter/aperture setup, CD_STATUS_WAIT retry wrapping,
+// waitCdCommandReady, the non-blocking cd_linear_pump_t) - this is meant to
+// be a faithful reproduction of the old logic for an A/B test against it,
+// not an "improved" hybrid. To use this instead of cd.h/cd_sega.h, swap the
+// #include line for cd_old.h in main.c/film_lib_old.c/film_buff_old.c (and
+// use film_buff_old.c/film_lib_old.c together - both together, don't mix
+// with the newer film_buff.c/film_buff_sega.c/film_lib.c).
 
 #include "base.h"
 
@@ -43,7 +55,6 @@ static void waitForCD() {
   }
 }
 
-
 static void queueDiskRead(uint32_t fad, uint32_t size) {
   DEBUG_REQUIRE_NE(size, 0);
   DEBUG_REQUIRE_EQ(size % 4, 0);
@@ -73,6 +84,16 @@ static uint32_t getSectorsReady(uint32_t wantSectors) {
   return sectorsReady;
 }
 
+// The old build had no equivalent helper - loadSoundDriver() (main.c) is
+// the only caller, and it's a current-codebase addition. Kept as a plain,
+// unwrapped passthrough (no CD_STATUS_WAIT retry loop) rather than pulling
+// in the newer retry-wrapper version, to stay consistent with old cd.h's
+// general style of not retry-wrapping commands - this exists here only so
+// main.c compiles unchanged against this header.
+static void cdCmdDataTransferEnd() {
+  cd_block_cmd_data_transfer_end();
+}
+
 static void waitUntilCdDataIsAvailable() {
   // Wait until data is available
   bool ready __unused = false;
@@ -86,4 +107,4 @@ static void waitUntilCdDataIsAvailable() {
   DEBUG_REQUIRE(ready);
 }
 
-#endif //DECODER_CD_H
+#endif //DECODER_CD_OLD_H

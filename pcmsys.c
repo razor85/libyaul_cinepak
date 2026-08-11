@@ -5,12 +5,10 @@
 #include <yaul.h>
 
 #include <math.h>
-#include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "pcmsys.h"
-#include "base.h"
+//#include "base.h"
 
 // clang-format off
 static const int logtbl[] = {
@@ -159,6 +157,13 @@ void pcmsys_load_driver(void *buffer, uint32_t length) {
   m68k_com->start = 0xFFFF;
 }
 
+void clearDspRam() {
+  // clear DSP RAM:
+  for (uint16_t i = 0; i < 0x400; i += 2) {
+    *(volatile uint16_t *) (DSPRAM + i) = 0x0000;
+  }
+}
+
 short calculate_bytes_per_blank(uint16_t sampleRate, bool is8Bit, bool isPAL) {
   int frameCount = (isPAL == true) ? 50 : 60;
   int sampleSize = (is8Bit == true) ? 8 : 16;
@@ -190,8 +195,7 @@ uint8_t *getSlotAddress(uint32_t slot) {
 inline uint32_t getSlotSize() { return (128 * 1024); }
 
 uint32_t pcmStreamBufferSize(uint8_t bits, uint16_t frequency __unused) {
-  // Capped at unsigned short's max sample count and kept a multiple of 4.
-  return (bits == 8) ? 65532 : 131068;
+  return (bits == 8) ? 65472 : 131008;
 }
 
 void pcmsys_load_16bit_pcm_slot(uint32_t length, uint16_t sampleRate,
@@ -216,10 +220,10 @@ void pcmsys_load_16bit_pcm_slot(uint32_t length, uint16_t sampleRate,
   m68k_com->pcmCtrl[slot].bytes_per_blank =
     calculate_bytes_per_blank(sampleRate, false, PCM_SYS_REGION);
   m68k_com->pcmCtrl[slot].bitDepth = PCM_TYPE_16BIT;
-  m68k_com->pcmCtrl[slot].loopType = PCM_NO_LOOP;
+  m68k_com->pcmCtrl[slot].loopType = loopType;
   m68k_com->pcmCtrl[slot].volume = PCM_MAX_VOLUME;
 
- 
+
 }
 
 void pcmsys_load_8bit_pcm_slot(uint32_t length, uint16_t sampleRate, uint32_t slot, int8_t loopType) {
@@ -243,7 +247,7 @@ void pcmsys_load_8bit_pcm_slot(uint32_t length, uint16_t sampleRate, uint32_t sl
   m68k_com->pcmCtrl[slot].bytes_per_blank =
     calculate_bytes_per_blank(sampleRate, true, PCM_SYS_REGION);
   m68k_com->pcmCtrl[slot].bitDepth = PCM_TYPE_8BIT;
-  m68k_com->pcmCtrl[slot].loopType = PCM_NO_LOOP;
+  m68k_com->pcmCtrl[slot].loopType = loopType;
   m68k_com->pcmCtrl[slot].volume = PCM_MAX_VOLUME;
 
 }
@@ -325,8 +329,7 @@ bool pcmStreamStop() {
     }
     
     for (volatile uint32_t i = 0; i < pcmStream.numChannels; i++) {
-      uint8_t* memoryAddress = getSlotAddress(i);
-      memset(memoryAddress, 0, getSlotSize());
+      memset(getSlotAddress(i), 0, getSlotSize());
     }
 
     pcmStreamClear();
