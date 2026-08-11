@@ -7,21 +7,10 @@
 #endif
 
 // CRI ADX (standard fixed-coefficient, 4-bit, 500Hz cutoff, 18-byte blocks:
-// 2-byte BE scale + 16 bytes of nibbles = 32 samples/block). This codec was
-// never present in Sega's SBL Cinepak library, so there's no reference
-// decompilation to mirror - follows the publicly documented CRI ADX
-// algorithm (as used by ffmpeg/vgmstream) instead.
-//
-// adx_decode_block() below only computes the raw scaled residual - the
-// recursive predictor filter runs on the SCSP DSP instead (adx_dsp_sega.c),
-// so there's no per-channel history to track here on the SH2 side.
-//
-// Stereo source layout mirrors the PCM path: planar, first half of the
-// sample is the left channel's block stream, second half is right.
-//
-// remainingPcmBytes means decoded (16-bit PCM) bytes remaining, same
-// convention as the PCM path: decodedBytes = (compressedBytes / 18) * 64
-// (per channel, for stereo).
+// 2-byte BE scale + 16 bytes of nibbles = 32 samples/block). This was made
+// by reverse engineering Sakura Wars 2 to see what Sega's official implmentation did.
+// Originally it was really slow so I had Claude look at what the compiler output and 
+// make suggestions. A lot of the inline assembly came from this.
 
 #define ADX_BLOCK_BYTES      18
 #define ADX_BLOCK_DATA_BYTES 16
