@@ -49,9 +49,9 @@ typedef struct {
 // the sample length.
 typedef struct {
   uint8_t *offset;
-  int32_t length;
-  int32_t time;
-  int32_t duration;
+  uint32_t length;
+  uint32_t time;
+  uint32_t duration;
 } __packed __aligned(4) film_sample_t;
 
 typedef struct {
@@ -104,9 +104,9 @@ typedef struct {
 
 typedef struct {
   int32_t offset;
-  int32_t size;
-  int32_t play_tick;
-  int32_t duration_ticks;
+  uint32_t size;
+  uint32_t play_tick;
+  uint32_t duration_ticks;
 } __packed __aligned(
   4) stab_entry; // same as cd_film_sample_t, but this is what the actual
                  // variables are referred to in SBL.
@@ -164,16 +164,18 @@ typedef struct {
 typedef struct decode_work_t {
   decode_param_t *decodeParams;
   playback_status_t play_status;
-  bool isDisplayReady;
-  bool displayWaiting;
   int32_t timeEllapsed;
   int32_t frtOverflowCount;
-  int32_t ticksUntilNextFrame;
-  int32_t tickCount;
+  uint32_t ticksUntilNextFrame;
+  uint32_t tickCount;
+  int32_t tickStart;
   int32_t lastFrameTime;
+  int32_t targetAudioBytes;
   int32_t copyingVideoFrame;
   int32_t videoStartY;
   int32_t dma_delta;
+  bool isDisplayReady;
+  bool displayWaiting;
   bool audioPlaying;
   bool audioWaitingToStart;
   stripdata_t stripData;

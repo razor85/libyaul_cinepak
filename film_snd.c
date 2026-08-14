@@ -255,7 +255,8 @@ bool parseAudioMono(decode_work_t *work) {
   }
 
   if (!work->audioPlaying) {
-      work->audioWaitingToStart = true;
+    film_audio_play(work->decodeParams->pcmVolume);
+    work->audioPlaying = true;
   }
 
   return cache->remainingPcmBytes == 0;
@@ -307,7 +308,8 @@ bool parseAudioStereo(decode_work_t *work) {
   }
 
   if (!work->audioPlaying) {
-      work->audioWaitingToStart = true;
+    film_audio_play(work->decodeParams->pcmVolume);
+    work->audioPlaying = true;
   }
 
   return cache->remainingPcmBytes == 0;

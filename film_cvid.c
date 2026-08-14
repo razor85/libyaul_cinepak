@@ -764,19 +764,6 @@ void parseVideo(decode_work_t *work) {
   const bool copyLastCodeBooks = !(cvidHeader->flagsAndCvidLength.b[0] & 0x1);
   int16_t lastBottomY = 0;
 
-  // Defensive bound, not a new invariant: cap all forward progress in this
-  // function against the sample's OWN declared byte length (work->nextSample,
-  // already set by handle_play() and already trusted for the ring-buffer/
-  // guard-region bookkeeping) rather than trusting stripDataLength/
-  // chunkDataLength fields read from the stream on their own. Confirmed via
-  // the background-color signal that a stuck decode lands in the "unknown
-  // chunk id" default case below - if a strip's declared length is ever
-  // wrong, or the ring buffer hasn't actually delivered the bytes readPos is
-  // reading yet, the loops below had nothing stopping them from grinding
-  // forward through unrelated memory. Mirrors the spirit of Sega's
-  // cpk_VideoSampleCvid sampleDataSize bounds-check, but bounded against a
-  // value this codebase already trusts instead of a new assumption about
-  // the file format.
   uint8_t *sampleEnd = work->nextSample.offset + work->nextSample.length;
 
   int8_t colorDepth = work->decodeParams->decodeColorDepth;

@@ -137,6 +137,7 @@ void cpk_play(decode_work_t *work) {
   work->audioWaitingToStart = false;
   work->isDisplayReady = false;
   work->displayWaiting = false;
+  work->tickStart = frtTimerEllapsed();
   work->lastFrameTime = frtTimerEllapsed();
   work->play_status = PLAY;
 }
@@ -158,6 +159,28 @@ void cpk_task(decode_work_t *work) {
   default:
     break;
   }
+}
+
+// Had claude make this from the disassembly of Sega's time keeping to make it exact.
+static inline void mulWide32(int32_t a, int32_t b, int32_t *hi, int32_t *lo) {
+  int32_t h, l;
+  __asm__ volatile (
+    "dmuls.l %[a], %[b]\n\t"
+    "sts mach, %[h]\n\t"
+    "sts macl, %[l]"
+    : [h] "=&r" (h), [l] "=&r" (l)
+    : [a] "r" (a), [b] "r" (b)
+    : "mach", "macl");
+  *hi = h;
+  *lo = l;
+}
+
+//Mimics what Segas code does for time keeping, they apparently use the div unit and don't care about wasting 38 cycles waiting.
+static int32_t cpk_GetTimeNative(decode_work_t *work) {
+  int32_t hi, lo;
+  mulWide32((int32_t) work->tickCount, work->filmHeader.stab.ticks_per_second, &hi, &lo);
+  cpu_divu_64_32_set((uint32_t) hi, (uint32_t) lo, 1000);
+  return (int32_t) cpu_divu_quotient_get();
 }
 
 void handle_play(decode_work_t *work) {
@@ -208,23 +231,18 @@ void handle_play(decode_work_t *work) {
             work->stream.sampleCache.currentSample++;
             advanceReadyThreshold(work);
             work->stream.sampleCache.readPos = work->nextSample.offset;
-            cpu_divu_32_32_set((work->nextSample.duration * 1000), work->filmHeader.stab.ticks_per_second);
+            work->ticksUntilNextFrame = (work->nextSample.time & 0x7FFFFFFF);
+            sprintf((char *) LWRAM(0), "Sample Time 0x%X\n",
+              (work->nextSample.time & 0x7FFFFFFF));
             parseVideo(work);
             work->decodeParams->vramWritePos = work->decodeParams->vramBuffAddr;
-            work->ticksUntilNextFrame = cpu_divu_quotient_get();
             work->displayWaiting = true;
-            if (work->audioWaitingToStart == true) {
-              film_audio_play(work->decodeParams->pcmVolume);
-              work->audioWaitingToStart = false;
-              work->audioPlaying = true;
-            }
           }
     }
   }
 
   if (work->displayWaiting) {
-
-    if (work->tickCount < work->ticksUntilNextFrame) {
+     if ((uint32_t) cpk_GetTimeNative(work) < work->ticksUntilNextFrame) {
       int32_t ellapsed = frtTimerEllapsed();
       work->timeEllapsed = ellapsed;
       int32_t deltaTime = ellapsed - work->lastFrameTime;
@@ -237,7 +255,7 @@ void handle_play(decode_work_t *work) {
         work->lastFrameTime = frtTimerEllapsed();
       }
     } else {
-        work->isDisplayReady = true;
+      work->isDisplayReady = true;
     }
   }
   if (work->stream.sampleCache.currentSample >=
@@ -250,7 +268,6 @@ void handle_play(decode_work_t *work) {
 inline bool cpk_display_ready(decode_work_t *work) { return work->isDisplayReady; }
 
 inline void cpk_display_finished(decode_work_t *work) {
-  work->tickCount = 0;
   work->isDisplayReady = false;
   work->displayWaiting = false;
 }
