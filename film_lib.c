@@ -232,8 +232,6 @@ void handle_play(decode_work_t *work) {
             advanceReadyThreshold(work);
             work->stream.sampleCache.readPos = work->nextSample.offset;
             work->ticksUntilNextFrame = (work->nextSample.time & 0x7FFFFFFF);
-            sprintf((char *) LWRAM(0), "Sample Time 0x%X\n",
-              (work->nextSample.time & 0x7FFFFFFF));
             parseVideo(work);
             work->decodeParams->vramWritePos = work->decodeParams->vramBuffAddr;
             work->displayWaiting = true;
