@@ -786,7 +786,7 @@ void parseVideo(decode_work_t *work) {
           work->stripData.strip = stripNum;
 
           if (stripNum > 0 && copyLastCodeBooks) {
-                stripdata_copyLastCodebooks_nodma(&work->stripData);
+            stripdata_copyLastCodebooks(&work->stripData);
           }
           currentCodebook = &work->stripData.codebooks[stripNum > 0 ? 1 : 0];
 

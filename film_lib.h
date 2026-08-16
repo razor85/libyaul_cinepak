@@ -168,6 +168,7 @@ typedef struct decode_work_t {
   int32_t frtOverflowCount;
   uint32_t ticksUntilNextFrame;
   uint32_t tickCount;
+  uint32_t lastSampleEndTime;
   int32_t tickStart;
   int32_t lastFrameTime;
   int32_t targetAudioBytes;

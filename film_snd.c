@@ -114,8 +114,11 @@ static inline void film_audio_get_next_buffer_info(int32_t *contigSpace, int32_t
 
   int32_t inFlight = (int32_t) (audioTotalWrittenBytes - audioConfirmedConsumedBytes);
   int32_t free = soundBufferSize - inFlight;
+
   if (free < 0) {
     free = 0;
+  } else if (free > soundBufferSize) {
+    free = soundBufferSize;
   }
 
   *freeSpace = free;
@@ -141,14 +144,28 @@ void film_audio_play(uint8_t volume) {
 }
 
 void film_audio_fill_silence(decode_work_t *work) {
-  int32_t remaining = (int32_t) (soundMemoryLimit - soundMemory);
-  if (remaining <= 0) {
+  int32_t contigSpace, freeSpace;
+  film_audio_get_next_buffer_info(&contigSpace, &freeSpace);
+  if (contigSpace > freeSpace) {
+    contigSpace = freeSpace;
+  }
+  if (freeSpace <= 0) {
     return;
   }
 
-  memset(film_audio_get_next_buffer_ptr(0), 0, remaining);
+  memset(film_audio_get_next_buffer_ptr(0), 0, contigSpace);
   if (work->filmHeader.fdsc.sound_channels == 2) {
-    memset(film_audio_get_next_buffer_ptr(1), 0, remaining);
+    memset(film_audio_get_next_buffer_ptr(1), 0, contigSpace);
+  }
+  film_audio_notify_read_buffer_bytes(contigSpace);
+  
+  int32_t remainder = freeSpace - contigSpace;
+  if (remainder > 0) {
+    memset(film_audio_get_next_buffer_ptr(0), 0, remainder);
+    if (work->filmHeader.fdsc.sound_channels == 2) {
+      memset(film_audio_get_next_buffer_ptr(1), 0, remainder);
+    }
+    film_audio_notify_read_buffer_bytes(remainder);
   }
 }
 
@@ -255,8 +272,7 @@ bool parseAudioMono(decode_work_t *work) {
   }
 
   if (!work->audioPlaying) {
-    film_audio_play(work->decodeParams->pcmVolume);
-    work->audioPlaying = true;
+    work->audioWaitingToStart = true;
   }
 
   return cache->remainingPcmBytes == 0;
@@ -308,8 +324,7 @@ bool parseAudioStereo(decode_work_t *work) {
   }
 
   if (!work->audioPlaying) {
-    film_audio_play(work->decodeParams->pcmVolume);
-    work->audioPlaying = true;
+    work->audioWaitingToStart = true;
   }
 
   return cache->remainingPcmBytes == 0;

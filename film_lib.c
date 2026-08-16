@@ -72,6 +72,10 @@ void init_film_start(cdfs_filelist_entry_t *fsEntry, decode_work_t *work,
       work->filmHeader.fdsc.sample_rate >> 16, false, false);
   }
 
+  uint32_t lastSampleTime =
+    (work->filmHeader.stab.entries[work->filmHeader.stab.total_entries - 1].time & 0x7FFFFFFF);
+  uint32_t lastSampleDuration = work->filmHeader.stab.entries[work->filmHeader.stab.total_entries - 1].duration;
+  work->lastSampleEndTime = lastSampleTime + lastSampleDuration;
   film_sample_cache_new(&work->stream, work->filmHeader.stab.total_entries);
 
   bytesNeededForCurrentSample = (uint32_t) work->stream.sampleCache.samples[0].length;
@@ -184,6 +188,8 @@ static int32_t cpk_GetTimeNative(decode_work_t *work) {
 }
 
 void handle_play(decode_work_t *work) {
+  int32_t sampleIdxAtTickStart = work->stream.sampleCache.currentSample;
+
   pollAudioConfirmTimer();
   asyncReadBytesIntoRingBuff(&work->stream);
   if (work->filmHeader.fdsc.sound_codec == FDSC_CODEC_ADX) {
@@ -213,15 +219,12 @@ void handle_play(decode_work_t *work) {
             }
           }
           if (work->parseAudioFn(work)) {
-            if (work->stream.sampleCache.currentSample ==
-              work->lastAudioSampleIndex) {
-              film_audio_fill_silence(work);
-            }
             work->stream.sampleCache.currentSample++;
             advanceReadyThreshold(work);
           }
         }
   }
+
   if (!work->displayWaiting) {
     if (sampleIsReady(work)) {
           film_sample_t *sample =
@@ -239,27 +242,47 @@ void handle_play(decode_work_t *work) {
     }
   }
 
+  {
+    int32_t ellapsed = frtTimerEllapsed();
+    work->timeEllapsed = ellapsed;
+    int32_t deltaTime = ellapsed - work->lastFrameTime;
+    if (deltaTime > 0) {
+      work->lastFrameTime = ellapsed;
+      work->tickCount += deltaTime;
+    }
+    if (work->timeEllapsed >= 1000) {
+      frtTimerStart(ellapsed - 1000);
+      work->lastFrameTime = frtTimerEllapsed();
+    }
+  }
+
+  if (work->stream.sampleCache.currentSample >=
+    work->stream.sampleCache.numSamples) {
+    if (!work->displayWaiting) {
+      if (!work->hasVideoSamples) {
+        film_audio_fill_silence(work);
+        work->play_status = END;
+      } else {
+       
+        if (cpk_GetTimeNative(work) >= work->lastSampleEndTime) {
+          film_audio_fill_silence(work);
+          work->play_status = END;
+        }
+      }
+    }
+  }
+
   if (work->displayWaiting) {
-     if ((uint32_t) cpk_GetTimeNative(work) < work->ticksUntilNextFrame) {
-      int32_t ellapsed = frtTimerEllapsed();
-      work->timeEllapsed = ellapsed;
-      int32_t deltaTime = ellapsed - work->lastFrameTime;
-      if (deltaTime > 0) {
-        work->lastFrameTime = ellapsed;
-        work->tickCount += deltaTime;
+    if ((uint32_t) cpk_GetTimeNative(work) >= work->ticksUntilNextFrame) {
+      if (work->audioWaitingToStart) {
+        film_audio_play(work->decodeParams->pcmVolume);
+        work->audioPlaying = true;
+        work->audioWaitingToStart = false;
       }
-      if (work->timeEllapsed >= 1000) {
-        frtTimerStart(ellapsed - 1000);
-        work->lastFrameTime = frtTimerEllapsed();
-      }
-    } else {
       work->isDisplayReady = true;
     }
   }
-  if (work->stream.sampleCache.currentSample >=
-    work->stream.sampleCache.numSamples) {
-    work->play_status = END;
-  }
+  
 
 }
 

@@ -56,10 +56,6 @@ void loadSoundDriver() {
   const uint32_t sectorsReady =
     getSectorsReady(numSectorsForSize(soundDriverEntry->size));
 
-  // Same unchecked-result gap already found and fixed in triggerDataRequest()/
-  // stream_new() (film_buff.c) - retry on CD_STATUS_WAIT instead of ignoring
-  // the result, since this runs on every boot right after queueDiskRead()'s
-  // fresh disk_play, the same high-contention moment.
   int status;
   do {
     status = cd_block_cmd_sector_data_get_delete(0, 0, sectorsReady);
